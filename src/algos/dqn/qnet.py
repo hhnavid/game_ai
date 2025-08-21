@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 import random
 from common.replay_buffer import ReplayBuffer
@@ -9,7 +8,7 @@ from common.net_param_manip import init_xavier_weights
 
 class QNetwork(nn.Module):
     
-    def __init__(self, fan_ins, activation, learning_rate):
+    def __init__(self, fan_ins, activation, lr):
         """Q network class for DQN
         Args:
             fan_ins: list containing input dimension for each net. layer. 1st item in the list must be state_dim and last item must be action_dim
@@ -29,11 +28,7 @@ class QNetwork(nn.Module):
         [self.layers.add_module(name, layer) for name, layer in layer_items]
 
         # Init network weights
-        self.apply(init_xavier_weights)
-
-        # Initialize Optimizer
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-            
+        self.apply(init_xavier_weights)                            
     
     def forward(self, states):
         # Hidden layers
@@ -54,38 +49,37 @@ class QNetwork(nn.Module):
 
 class DQN:
     
-    def __init__(self, state_dim, action_dim, hidden_dim=64, gamma=0.99, lr=1e-3, batch_size=64,
-                 replay_buffer_size=10000, epsilon_start=1.0, epsilon_final=0.01, epsilon_decay=500):
-        
+    def __init__(self, state_dim, action_dim, hidden_layers=[64, 63], activation_,
+                 gamma=0.95, lr=1e-4, bs=32, replay_buff_size=10000, epsilon_start=1.0, epsilon_final=0.01, epsilon_decay=500):                
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
+        self.state_dim = state_dim
+        self.action_dim = action_dim
         fan_ins = [self.state_dim] + hidden_layers + [self.action_dim]
-        self.q_network = QNetwork(fan_ins, activation, learning_rate).to(self.device)
+        self.q_network = QNetwork(fan_ins, activation_, lr).to(self.device)
         
-        self.target_network = QNetwork(state_dim, action_dim, hidden_dim).to(self.device)
+        self.target_network = QNetwork(fan_ins, activation_, lr).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.target_network.eval()
 
-        self.optimizer = optim.Adam(self.q_network.parameters(), lr=lr)
-        self.replay_buffer = ReplayBuffer(replay_buffer_size)
+        self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)
+        self.replay_buffer = ReplayBuffer(replay_buff_size)
         self.gamma = gamma
-        self.batch_size = batch_size
+        self.batch_size = bs
         
-        self.epsilon_start = epsilon_start
-        self.epsilon_final = epsilon_final
-        self.epsilon_decay = epsilon_decay
+        self.eps_start = epsilon_start
+        self.eps_final = epsilon_final
+        self.eps_decay = epsilon_decay
         
-        self.epsilon = epsilon_start
+        self.eps = epsilon_start
         self.action_dim = action_dim
         self.steps_done = 0
 
     def select_action(self, state):
         self.steps_done += 1
-        self.epsilon = self.epsilon_final + \
-            (self.epsilon_start - self.epsilon_final) * \
-            np.exp(-1. * self.steps_done / self.epsilon_decay)
+        self.eps = self.eps_final + (self.eps_start - self.eps_final) * np.exp(-1. * self.steps_done / self.eps_decay)
 
-        if random.random() < self.epsilon:
+        if random.random() < self.eps:
             return random.randrange(self.action_dim)
         else:
             state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
