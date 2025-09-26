@@ -1,14 +1,18 @@
 import sys
-sys.path.append('I:\projs\game-ai\src')
+sys.path.append('I:/projs/game-ai/src')
 
+import time
+import os
 import torch
 import torch.nn as nn
 import numpy as np
 import random
-from common.stbl3_buffers import ReplayBuffer
+from datetime import datetime
+from common.my_replay_buffer import ReplayBuffer
 from common.utils import LinearSchedule
 from common.net_param_manip import init_xavier_weights
 from common.running_mean_std import *
+from common.save_dict2csv import CSVLogger
 
 
 class QNetwork(nn.Module):
@@ -54,15 +58,65 @@ class QNetwork(nn.Module):
 
 class DQN:
     
-    def __init__(self, env, 
-                 state_dim, action_dim, 
+    def __init__(self,
+                 n_train_steps, n_rollout_steps, n_eval_steps,
+                 total_timesteps,                 
+                 env, env_name,
+                 eval_env,
+                 obs_dim, obs_dtype, 
+                 action_dim, action_dtype,
                  hidden_layers=[64, 63], activation_=nn.ReLU,
                  normalize_obs=True, gamma=0.95, tau=1.0, lr=1e-4, bs=32,
                  exploration_fraction=0.1, exploration_initial_eps=1.0,
-                 exploration_final_eps=0.05, replay_buff_size=10000):
+                 exploration_final_eps=0.05, replay_buff_size=10000,
+                 explore_render=False, eval_render=False,
+                 log_interval=20,
+                 path_prefix=".\\results"):
+        """
+        Args:
+            n_train_steps (int): number of training steps before interacting with the env again
+            n_rollout_steps (int): number of explorative steps taken in the env before 
+                                   2 successive training sessions
+            n_eval_steps (_type_): _description_
+            total_timesteps (int): Total number of interaction steps performed in
+                                   the env. After `total_timesteps`, learning ends.
+            env (_type_): _description_
+            env_name (_type_): _description_
+            eval_env (_type_): _description_
+            state_dim (_type_): _description_
+            obs_dtype (_type_): _description_
+            action_dim (_type_): _description_
+            action_dtype (_type_): _description_
+            hidden_layers (list, optional): _description_. Defaults to [64, 63].
+            activation_ (_type_, optional): _description_. Defaults to nn.ReLU.
+            normalize_obs (bool, optional): _description_. Defaults to True.
+            gamma (float, optional): _description_. Defaults to 0.95.
+            tau (float, optional): _description_. Defaults to 1.0.
+            lr (_type_, optional): _description_. Defaults to 1e-4.
+            bs (int, optional): _description_. Defaults to 32.
+            exploration_fraction (float, optional): _description_. Defaults to 0.1.
+            exploration_initial_eps (float, optional): _description_. Defaults to 1.0.
+            exploration_final_eps (float, optional): _description_. Defaults to 0.05.
+            replay_buff_size (int, optional): _description_. Defaults to 10000.
+            explore_render (bool, optional): _description_. Defaults to False.
+            eval_render (bool, optional): _description_. Defaults to False.
+            log_interval (int): After every `log_interval` epochs of {perform rollouts, train, evaluate}, statistics are logged.
+            path_prefix (str, optional): _description_. Defaults to "../../results".                       
+        """
         
         # the environment that the agent must learn
-        self.env = env        
+        self.env = env
+        self.env_name = env_name
+        self.explore_render = explore_render
+        self.eval_env = eval_env
+        self.eval_render = eval_render
+        
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")  
+        run_name = "dqn_" + env_name + "_" + date_str
+        self.save_path_prefix = os.path.join(path_prefix, run_name)        
+        if not os.path.exists(self.save_path_prefix):
+            os.makedirs(self.save_path_prefix)
+            print('Create log dir: {}'.format(self.save_path_prefix))
         
         device_name = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device_name)
@@ -76,9 +130,10 @@ class DQN:
             self.exploration_final_eps,
             self.exploration_fraction)
         
-        self.state_dim = state_dim
+        self.last_obs = None
+        self.obs_dim = obs_dim
         self.action_dim = action_dim
-        fan_ins = [self.state_dim] + hidden_layers + [self.action_dim]
+        fan_ins = [self.obs_dim] + hidden_layers + [self.action_dim]
         self.q_network = QNetwork(fan_ins, activation_, lr).to(self.device)
         
         self.target_network = QNetwork(fan_ins, activation_, lr).to(self.device)
@@ -86,11 +141,10 @@ class DQN:
         self.target_network.eval()
 
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)
-        self.replay_buffer = ReplayBuffer(replay_buff_size,
-                                          obs_dim=state_dim, obs_dtype=np.float32,
-                                          action_dim=action_dim, action_dtype=np.float32,
-                                          device=device_name,
-                                          handle_timeout_termination=True)
+        self.replay_buffer = ReplayBuffer(limit=replay_buff_size,
+                                          obs_shape=(obs_dim,),
+                                          obs_dtype=obs_dtype, 
+                                          action_shape=(action_dim,), action_dtype=action_dtype)            
         self.gamma = gamma
         self.batch_size = bs                                
         
@@ -100,31 +154,163 @@ class DQN:
         # Observation normalization
         self.normalize_obs = normalize_obs
         if self.normalize_obs:
-            self.obs_rms = RunningMeanStdMPI(shape=(self.state_dim,))
+            self.obs_rms = RunningMeanStdMPI(shape=(self.obs_dim,))
         else:
             self.obs_rms = None
             
-    def collect_rollouts(self, ):
-        """
-        Interact with the env and store observed transitions in
-        the replay buffer
-        """
+        self.n_train_steps = n_train_steps
+        self.n_rollout_steps = n_rollout_steps
+        self.n_eval_steps = n_eval_steps                
+        self.total_timesteps = total_timesteps
+        self.total_epochs = 0 # Total number of epochs performed so far
+        self.log_interval = log_interval
+                                
+    
+    def reset(self):
         pass
     
-    def learn(self, total_timesteps):
-        while self.steps_done < total_timesteps:
+        
+    def init_train_variables(self):                
+        self.epoch_episode_rewards = []  # Each item of this list contains sum of immediate rewards for 1 explorative episode        
+        combined_stats = {'rollout/return': 0.,
+                          'eval/return': 0.,
+                          'total/epochs': 0,
+                          'total/episodes': 0,
+                          'total/steps': 0,
+                          'total/hours': 0.}
+        # Logger
+        self.logger = CSVLogger(os.path.join(self.save_path_prefix, 'results.csv'),
+                                keys=combined_stats.keys(), mode='write')
+        return
+            
+    
+    def collect_rollout_steps(self):
+        obs = self.last_obs.copy()        
+        for _ in range(self.n_rollout_steps):
+
+                    if total_steps >= self.total_timesteps:   # Training is over so return
+                        return
+                                        
+                    # Select action
+                    action = self.get_action(obs)
+                    
+                    # Render env
+                    if self.explore_render and self.total_epochs % self.log_interval == 0:
+                        self.env.render()
+                        
+                    # Execute action
+                    new_obs, reward, done, info = self.env.step(action)
+
+                    # Update statistics
+                    total_steps += 1
+                    episode_reward += reward
+                    episode_step += 1
+
+                    # Store observed transition
+                    self.store_transition(obs, action, reward, new_obs, done)
+                    obs = new_obs
+                    
+                    if done:
+                        self.epoch_episode_rewards.append(episode_reward)
+                        episode_reward = 0
+                        episode_step = 0
+                        total_episodes += 1
+
+                        # Episode done => Reset agent noises, reset environment
+                        self.reset()
+                        obs = self.env.reset()
+        self.last_obs = obs.copy()
+        return
+        
+        
+    def train(self):
+        epoch_actor_losses = []
+        epoch_critic_losses = []
+        epoch_adaptive_distances = []
+        for t_train in range(self.n_train_steps):
             pass
+        
+        
+    def train_step(self):
+        self.replay_buffer.sample(batch_size=self.batch_size)
     
-    def train(self, ):
-        pass
     
-    def get_action(self, ):
-        pass
+    def learn(self):        
+        # Reset agent state (i.e. reset action/param noises)
+        self.reset()
+        
+        # Reset env and set initial state (i.e obs)
+        self.last_obs = self.env.reset()
+        
+        # if eval_env is available, reset it too and set initial evaluation state (i.e.eval_obs)
+        eval_obs = None
+        if self.eval_env is not None:
+            if self.eval_render:
+                self.eval_env.render()     # (for pyBullet env.) call before env.reset to show a window of the env.
+            eval_obs = self.eval_env.reset()
+            
+        # Define statistics variables
+        # ----------------------------        
+        total_episodes = 0  # Total number of explorative episodes performed so far
+        total_steps = 0  # Total number of explorative steps performed so far
+        total_hours = 0.0
+        eval_episode_reward = 0.0
+        eval_episode_rewards = []  # Each item of this list contains sum of immediate rewards for 1 evaluation episode
+
+        # Sum of immediate rewards in 1 episode. When episode is done, it's saved in
+        # `epoch_episode_rewards` list & `episode_rewards_history` queue. Next it is reset to 0
+        episode_reward = 0.
+        # Number of explorative steps performed in 1 episode. When episode is done, it's saved in
+        #  `epoch_episode_steps` list. Next it is reset to 0.
+        episode_step = 0        
+        
+        self.init_train_variables()        
+        
+        # The main learning loop. It ends when `total_steps >= total_timesteps`
+        while True:
+            # This is epoch loop, that every `log_interval` epochs is ended to update `combined_stats`
+            for _ in range(self.log_interval):
+                epoch_start_time = time.time()
+                total_epochs += 1
+                
+                self.collect_rollout_steps()                
+                self.train()                
+                
+         
+    def get_action(self, obs, deterministic):
+        """
+        Select an action based on the given state 'obs'
+        Args:
+            obs (torch tensor): input state(s) [bs x obs_dim]            
+        returns:
+            action (np array): one of the |action_dim| discrete actions [bs x 1]
+        """
+        if deterministic:
+            # Greedy action selection
+            q_values = self.q_network(obs)            
+            action = q_values.argmax(dim=1).reshape(-1)
+        else:
+            # Select one of the discrete actions randomly
+            action = np.random.choice(self.action_dim)            
+        return action
     
-    def store_transition(self, ):
-        pass
+    def store_transition(self, curr_obs, action, reward, next_obs, done):
+        """
+        Stores a transitions in replay buffer
+        :param curr_state:[state_dim,]
+        :param action: [action_dim,]
+        :param reward: [1,]
+        :param next_state: [state_dim,]
+        :param done: [1,]
+        :return:
+       """        
+        self.buffer.append(curr_obs, action, reward, next_obs, done)
+
+        # Running avg/std update
+        if self.normalize_obs:
+            self.obs_rms.update( np.array([curr_obs]) )
+        if self.normalize_reward:
+            self.reward_rms.update(np.array([reward]))
     
 
 
-if __name__ == '__main__':
-    pass
