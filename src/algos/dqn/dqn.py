@@ -5,6 +5,7 @@ import time
 import os
 import torch
 import torch.nn as nn
+from torch import Tensor
 import numpy as np
 import random
 from datetime import datetime
@@ -64,15 +65,16 @@ class DQN:
                  env, env_name,
                  eval_env,
                  obs_dim, obs_dtype, 
-                 action_dim, action_dtype,
+                 action_dim, action_dtype, is_action_discrete,
                  hidden_layers=[64, 63], activation_=nn.ReLU,
                  normalize_obs=True, gamma=0.95, tau=1.0, lr=1e-4, bs=32,
                  exploration_fraction=0.1, exploration_initial_eps=1.0,
                  exploration_final_eps=0.05, replay_buff_size=10000,
                  explore_render=False, eval_render=False,
                  log_interval=20,
-                 path_prefix=".\\results"):
-        """
+                 path_prefix=".\\results"):        
+        """ 
+        trains the DQN agent
         Args:
             n_train_steps (int): number of training steps before interacting with the env again
             n_rollout_steps (int): number of explorative steps taken in the env before 
@@ -83,10 +85,11 @@ class DQN:
             env (_type_): _description_
             env_name (_type_): _description_
             eval_env (_type_): _description_
-            state_dim (_type_): _description_
+            obs_dim (_type_): _description_
             obs_dtype (_type_): _description_
             action_dim (_type_): _description_
             action_dtype (_type_): _description_
+            is_action_discrete (bool): true means the action space of the env is discrete
             hidden_layers (list, optional): _description_. Defaults to [64, 63].
             activation_ (_type_, optional): _description_. Defaults to nn.ReLU.
             normalize_obs (bool, optional): _description_. Defaults to True.
@@ -101,9 +104,8 @@ class DQN:
             explore_render (bool, optional): _description_. Defaults to False.
             eval_render (bool, optional): _description_. Defaults to False.
             log_interval (int): After every `log_interval` epochs of {perform rollouts, train, evaluate}, statistics are logged.
-            path_prefix (str, optional): _description_. Defaults to "../../results".                       
-        """
-        
+            path_prefix (str, optional): _description_. Defaults to ".\\results"
+        """                                
         # the environment that the agent must learn
         self.env = env
         self.env_name = env_name
@@ -123,7 +125,9 @@ class DQN:
         
         self.exploration_initial_eps = exploration_initial_eps
         self.exploration_final_eps = exploration_final_eps
-        self.exploration_fraction = exploration_fraction        
+        self.exploration_fraction = exploration_fraction  
+        self.current_progress_remaining = 1.0      
+        self.exploration_rate = 1.0
         
         self.exploration_schedule = LinearSchedule(
             self.exploration_initial_eps,
@@ -133,6 +137,7 @@ class DQN:
         self.last_obs = None
         self.obs_dim = obs_dim
         self.action_dim = action_dim
+        self.is_action_discrete = is_action_discrete
         fan_ins = [self.obs_dim] + hidden_layers + [self.action_dim]
         self.q_network = QNetwork(fan_ins, activation_, lr).to(self.device)
         
@@ -141,15 +146,18 @@ class DQN:
         self.target_network.eval()
 
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=lr)
+        if is_action_discrete:
+            # for discrete actions, only the chosen action is stored in the buffer
+            action_shape_ = (1,) 
+        else:
+            action_shape_ = (action_dim,)
         self.replay_buffer = ReplayBuffer(limit=replay_buff_size,
                                           obs_shape=(obs_dim,),
                                           obs_dtype=obs_dtype, 
-                                          action_shape=(action_dim,), action_dtype=action_dtype)            
+                                          action_shape=action_shape_, 
+                                          action_dtype=action_dtype)            
         self.gamma = gamma
-        self.batch_size = bs                                
-        
-        # num of steps that the agent has interacted with the env
-        self.steps_done = 0  
+        self.batch_size = bs                                                
         
         # Observation normalization
         self.normalize_obs = normalize_obs
@@ -157,12 +165,13 @@ class DQN:
             self.obs_rms = RunningMeanStdMPI(shape=(self.obs_dim,))
         else:
             self.obs_rms = None
+        self.normalize_reward = False
+        self.reward_rms = None
             
         self.n_train_steps = n_train_steps
         self.n_rollout_steps = n_rollout_steps
         self.n_eval_steps = n_eval_steps                
-        self.total_timesteps = total_timesteps
-        self.total_epochs = 0 # Total number of epochs performed so far
+        self.total_timesteps = total_timesteps        
         self.log_interval = log_interval
                                 
     
@@ -171,7 +180,21 @@ class DQN:
     
         
     def init_train_variables(self):                
-        self.epoch_episode_rewards = []  # Each item of this list contains sum of immediate rewards for 1 explorative episode        
+        self.epochs_so_far = 0 # Total number of epochs performed so far
+        self.episodes_so_far = 0  # Total number of explorative episodes performed so far
+        self.steps_so_far = 0  # Total number of explorative steps performed so far
+        
+        # Sum of immediate rewards in 1 episode. When episode is done, it's saved in
+        # `epoch_episode_rewards` list & `episode_rewards_history` queue. Next it is reset to 0
+        self.episode_reward = 0.
+        
+        # Each item of this list contains sum of immediate rewards for 1 explorative episode        
+        self.epoch_episode_rewards = []  
+        
+        # Number of explorative steps performed in 1 episode. When episode is done, it's saved in
+        #  `epoch_self.episode_steps` list. Next it is reset to 0.
+        self.episode_step = 0        
+        
         combined_stats = {'rollout/return': 0.,
                           'eval/return': 0.,
                           'total/epochs': 0,
@@ -185,42 +208,52 @@ class DQN:
             
     
     def collect_rollout_steps(self):
+        is_train_over = False
         obs = self.last_obs.copy()        
+        
         for _ in range(self.n_rollout_steps):
+            if self.steps_so_far >= self.total_timesteps: # Training is over so return
+                is_train_over = True
+                break
+                                                    
+            # Select action
+            action = self.get_action(obs, deterministic=False)
+            
+            # Render env
+            if self.explore_render and self.epochs_so_far % self.log_interval == 0:
+                self.env.render()
+                
+            # Execute action
+            new_obs, reward, terminated, truncated, info = self.env.step(action)
+            # terminated == true: episode ended naturally (goal state is reached)
+            # truncated == true: episode ended due to exceeding time limit or other limits
+            done = terminated or truncated                        
 
-                    if total_steps >= self.total_timesteps:   # Training is over so return
-                        return
-                                        
-                    # Select action
-                    action = self.get_action(obs)
-                    
-                    # Render env
-                    if self.explore_render and self.total_epochs % self.log_interval == 0:
-                        self.env.render()
-                        
-                    # Execute action
-                    new_obs, reward, done, info = self.env.step(action)
+            # Update statistics
+            self.steps_so_far += 1
+            self.episode_reward += reward
+            self.episode_step += 1
+            
+            # update exploration rate after each env step
+            self.exploration_rate = self.exploration_schedule(self.current_progress_remaining)
+            # update the current progress needed for the exploration schedule
+            self.current_progress_remaining = 1.0 - float(self.steps_so_far) / float(self.total_timesteps)
 
-                    # Update statistics
-                    total_steps += 1
-                    episode_reward += reward
-                    episode_step += 1
+            # Store observed transition
+            self.store_transition(obs, action, reward, new_obs, done)                        
+            obs = new_obs                        
+            
+            if done:
+                self.epoch_episode_rewards.append(self.episode_reward)
+                self.episode_reward = 0
+                self.episode_step = 0
+                self.episodes_so_far += 1
 
-                    # Store observed transition
-                    self.store_transition(obs, action, reward, new_obs, done)
-                    obs = new_obs
-                    
-                    if done:
-                        self.epoch_episode_rewards.append(episode_reward)
-                        episode_reward = 0
-                        episode_step = 0
-                        total_episodes += 1
-
-                        # Episode done => Reset agent noises, reset environment
-                        self.reset()
-                        obs = self.env.reset()
+                # Episode done => Reset agent noises, reset environment
+                self.reset()
+                obs = self.env.reset()[0]
         self.last_obs = obs.copy()
-        return
+        return is_train_over
         
         
     def train(self):
@@ -240,42 +273,33 @@ class DQN:
         self.reset()
         
         # Reset env and set initial state (i.e obs)
-        self.last_obs = self.env.reset()
+        self.last_obs = self.env.reset()[0]
         
         # if eval_env is available, reset it too and set initial evaluation state (i.e.eval_obs)
         eval_obs = None
         if self.eval_env is not None:
+            eval_obs = self.eval_env.reset()[0]
             if self.eval_render:
                 self.eval_env.render()     # (for pyBullet env.) call before env.reset to show a window of the env.
-            eval_obs = self.eval_env.reset()
+            
             
         # Define statistics variables
-        # ----------------------------        
-        total_episodes = 0  # Total number of explorative episodes performed so far
-        total_steps = 0  # Total number of explorative steps performed so far
+        # ----------------------------                
         total_hours = 0.0
         eval_episode_reward = 0.0
-        eval_episode_rewards = []  # Each item of this list contains sum of immediate rewards for 1 evaluation episode
-
-        # Sum of immediate rewards in 1 episode. When episode is done, it's saved in
-        # `epoch_episode_rewards` list & `episode_rewards_history` queue. Next it is reset to 0
-        episode_reward = 0.
-        # Number of explorative steps performed in 1 episode. When episode is done, it's saved in
-        #  `epoch_episode_steps` list. Next it is reset to 0.
-        episode_step = 0        
-        
+        eval_episode_rewards = []  # Each item of this list contains sum of immediate rewards for 1 evaluation episode                        
         self.init_train_variables()        
         
-        # The main learning loop. It ends when `total_steps >= total_timesteps`
+        # The main learning loop. It ends when `self.total_steps >= total_timesteps`
         while True:
             # This is epoch loop, that every `log_interval` epochs is ended to update `combined_stats`
             for _ in range(self.log_interval):
                 epoch_start_time = time.time()
-                total_epochs += 1
+                self.epochs_so_far += 1
                 
                 self.collect_rollout_steps()                
                 self.train()                
-                
+                                
          
     def get_action(self, obs, deterministic):
         """
@@ -285,13 +309,22 @@ class DQN:
         returns:
             action (np array): one of the |action_dim| discrete actions [bs x 1]
         """
+        # normalize obs
+        norm_obs = Tensor(normalize(obs, self.obs_rms)).to(self.device)
+        
         if deterministic:
             # Greedy action selection
-            q_values = self.q_network(obs)            
+            q_values = self.q_network(norm_obs)
             action = q_values.argmax(dim=1).reshape(-1)
         else:
-            # Select one of the discrete actions randomly
-            action = np.random.choice(self.action_dim)            
+            if np.random.rand() < self.exploration_rate:
+                # Select one of the discrete actions randomly
+                action = np.random.choice(self.action_dim)            
+            else:
+                # Greedy action selection
+                q_values = self.q_network(norm_obs)
+                action = q_values.argmax(dim=1).reshape(-1)
+                action = action.cpu().data.numpy()
         return action
     
     def store_transition(self, curr_obs, action, reward, next_obs, done):
@@ -304,7 +337,7 @@ class DQN:
         :param done: [1,]
         :return:
        """        
-        self.buffer.append(curr_obs, action, reward, next_obs, done)
+        self.replay_buffer.append(curr_obs, action, reward, next_obs, done)
 
         # Running avg/std update
         if self.normalize_obs:

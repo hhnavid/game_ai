@@ -39,6 +39,7 @@ def main():
               eval_env,
               state_dim, env.observation_space.dtype,
               action_dim, env.action_space.dtype,
+              is_action_discrete=True,
               hidden_layers=hidden_layers,
               activation_=activation_,
               normalize_obs=bool(args_dict['normalize_obs']),
