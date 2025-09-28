@@ -1,24 +1,24 @@
 # Environment config
 # ====================
 env_id: Acrobot-v1
-explore_render: 1 # bool 0: false, 1: true
-eval_render: 1 # bool
+explore_render: 0 # bool 0: false, 1: true
+eval_render: 0 # bool
 # evaluation: 1 # bool
-batch_size: 64
+batch_size: 128
 n_train_steps: 50 # per epoch
 n_eval_steps: 100 # per epoch
 n_rollout_steps: 100 # per epoch
-n_total_timesteps: 5e6 # total number of steps that agent interacts with the env.
+n_total_timesteps: 1e6 # total number of steps that agent interacts with the env.
 log_interval: 21
 return_plot: 1 # bool
 #checkpoint_every_n_epoch: 100
 # Critic config
 # ===================
-lr: 1e-3
-critic_hidden_layers: [64, 63]
+lr: 0.00063
+critic_hidden_layers: [256, 256]
 critic_activation: ReLU # "ReLU", "Sigmoid", "Tanh", "LeakyReLU", "ELU", "SELU", "GELU", "Softmax", "Softplus",
-replay_buff_size: 1e6
-tau: 1e-3
-gamma: 0.95
+replay_buff_size: 50000
+tau: 0.05
+gamma: 0.99
 normalize_obs: 1 # bool
 #obs_rms_plot: 0 # bool, If true, the running avg of observation will be plotted
