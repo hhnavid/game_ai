@@ -1,7 +1,7 @@
 # Environment config
 # ====================
-env_type: gym # could be gym or codeArt
-env_id: Acrobot-v1
+env_type: codeArt # could be gym or codeArt
+env_id: RacingAgent_v0
 explore_render: 0 # bool 0: false, 1: true
 eval_render: 0 # bool
 # evaluation: 1 # bool
@@ -18,7 +18,7 @@ return_plot: 1 # bool
 lr: 0.00063
 critic_hidden_layers: [256, 256]
 critic_activation: ReLU # "ReLU", "Sigmoid", "Tanh", "LeakyReLU", "ELU", "SELU", "GELU", "Softmax", "Softplus",
-replay_buff_size: 50000
+replay_buff_size: 1e6
 tau: 0.05
 gamma: 0.99
 normalize_obs: 1 # bool

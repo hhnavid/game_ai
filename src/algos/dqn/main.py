@@ -1,9 +1,11 @@
 import sys
 sys.path.append('I:/projs/game-ai/src')
 
-from common.parse_args import parse_arguments
-import torch      
+import torch
+import importlib      
 import gymnasium as gym
+from envs.racing_agent_v0 import RacingAgent_v0
+from common.parse_args import parse_arguments
 from algos.dqn.dqn import DQN
 
 
@@ -11,7 +13,28 @@ def main():
     # load experiment config from file    
     print("sys.args: {}".format(sys.argv)) 
     args_dict = parse_arguments(sys.argv)
+    if args_dict['env_type'] == 'gym':
+        learn_gym(args_dict)
+    elif args_dict['env_type'] == 'codeArt':
+        learn_codeart(args_dict)
+        
+        
+def learn_codeart(args_dict):
+    # create env    
+    env_class = globals()[args_dict['env_id']]    
+    env = env_class()            
     
+    response = env.send_test_command("Spline_GetNearestPoints")
+    print("Nearest spline points: {}\n".format(response.decode("utf-8")))
+    
+    response = env.send_test_command("Spline_GetAllPoints")
+    print("All spline points: {}\n".format(response.decode("utf-8")))
+    # setup_dqn(args_dict, env.state_dim, env.action_dim,
+    #           env, eval_env=None)
+    return
+        
+        
+def learn_gym(args_dict):
     # setup env        
     env = gym.make(args_dict['env_id'])#, render_mode="human")
     eval_env = gym.make(args_dict['env_id'], render_mode="human")
@@ -23,6 +46,13 @@ def main():
     else:
         # for continuous action spaces, action_dim == action vector dimension        
         action_dim = env.action_space.shape
+        
+    setup_dqn(args_dict, state_dim, action_dim,
+              env, eval_env)
+    return
+        
+def setup_dqn(args_dict, state_dim, action_dim,
+              env, eval_env=None):
         
     hidden_layers = []
     for l in args_dict['critic_hidden_layers']:
@@ -57,6 +87,9 @@ def main():
               log_interval=int(args_dict['log_interval']))
     dqn.learn()
     env.close()
-    
+    if eval_env is not None:
+        eval_env.close()
+    return
+
 if __name__ == '__main__':
     main()
