@@ -30,24 +30,34 @@ class TcpClient:
         """sends msg to tcp server
         Args:
             msg (str): message to be sent to the server
-        """
-        if self.sock is None:
-            print("Socket is not connected!")
+        """        
+        assert self.sock is not None, "Socket is not connected!"
 
         # Send data
-        print('sending "{}"'.format(msg))
+        # print('sending "{}"'.format(msg))
         self.sock.sendall(msg.encode("utf-8"))
         response = 0
 
         # Receive response
         response = self.sock.recv(4096)
-        # print("Received response from server: {}\n".format(response.decode("utf-8")))
+        response = response.decode("utf-8")
+        # print("Received response from server: {}\n".format(response))
         return response
 
     def close(self):
         print("closing socket...")
-        self.sock.close()
-
+        try:
+            # gracefully shut down both sending and receiving on the
+            # socket, which is good practice before closing
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+            
+        try:
+            self.sock.close()  # Close the socket to free resources
+        except Exception as e:
+            print(f"Error during socket closing: {e}")
+        
     def is_socket_open(self):
         try:
             # This checks for socket errors without blocking
