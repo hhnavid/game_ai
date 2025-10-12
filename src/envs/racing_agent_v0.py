@@ -2,6 +2,7 @@ import sys
 
 sys.path.append("I:/projs/game-ai/src")
 
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from network_.sock_ import TcpClient
@@ -9,14 +10,17 @@ from network_.sock_ import TcpClient
 
 class RacingAgent_v0:
 
-    def __init__(self, num_rivals):
+    def __init__(self, num_rivals, n_nearest_spline_pts):
         """
         Args:
             num_rivals (int): number of rivals that are present in the race
+            n_nearest_spline_pts (int): number of nearest spline points to be considered wrt to the
+            current position of the agent
         """
         self.fig, self.ax = plt.subplots()
-        
+
         self.num_rivals = num_rivals
+        self.n_nearest_spline_pts = str(n_nearest_spline_pts)
         # create tcp client
         self.tcp_client = TcpClient(ip="127.0.0.1", port=8080)
         self.commandSet = {
@@ -94,18 +98,30 @@ class RacingAgent_v0:
         prepares the command for getting the vehicle heading vector
         """
         return self.commandSet["Vehicle_GetForwardVector"] + "," + lvl_id + "," + veh_id
+    
+    def get_nearest_spline_points_command(self, lvl_id, spline_id, _3dpos):
+        """_summary_
+
+        Args:
+            lvl_id (str): level index
+            spline_id (str): spline index
+            _3dpos (str): comma-seperated xyz position wrt which nearest spline
+            points are determined
+
+        Returns:
+            _type_: _description_
+        """
+        return self.commandSet["Spline_GetNearestPoints"] + "," + lvl_id + "," + spline_id + "," + self.n_nearest_spline_pts + "," + 
 
     def get_obs(self):
         """
         get the current state of the env.
         """
         # get current pose of the agent & rivals
-        resp = self.tcp_client.send_data(
-            self.vehicle_get_position_command("0", "0")
-        )
-        items = resp.split(",")
+        agent_pos_str = self.tcp_client.send_data(self.vehicle_get_position_command("0", "0"))
+        items = agent_pos_str.split(",")
         agent_position = float(items[0]), float(items[1]), float(items[2])
-        
+
         rival_positions = np.zeros((self.num_rivals, 3))  # [#rivals x 3]
         for i in range(self.num_rivals):
             resp = self.tcp_client.send_data(
@@ -115,12 +131,10 @@ class RacingAgent_v0:
             rival_positions[i, :] = float(items[0]), float(items[1]), float(items[2])
 
         #  get current heading vector for the agent & rivals
-        resp = self.tcp_client.send_data(
-            self.vehicle_get_heading_command("0", "0")
-        )
+        resp = self.tcp_client.send_data(self.vehicle_get_heading_command("0", "0"))
         items = resp.split(",")
-        agent_heading = float(items[0]), float(items[1]), float(items[2])
-        
+        agent_heading = np.array([float(items[0]), float(items[1]), float(items[2])])
+
         rival_headings = np.zeros((self.num_rivals, 3))  # [#rivals x 3]
         for i in range(self.num_rivals):
             resp = self.tcp_client.send_data(
@@ -129,13 +143,17 @@ class RacingAgent_v0:
             items = resp.split(",")
             rival_headings[i, :] = float(items[0]), float(items[1]), float(items[2])
 
-        print("Agent position: {}, heading: {}".format(agent_position, agent_heading))
-        for i in range(self.num_rivals):
-            print(
-                "Rival {} position: {}, heading: {}".format(
-                    i, rival_positions[i], rival_headings[i]
-                )
-            )
+        # print("Agent position: {}, heading: {}".format(agent_position, agent_heading))
+        # for i in range(self.num_rivals):
+        #     print(
+        #         "Rival {} position: {}, heading: {}".format(
+        #             i, rival_positions[i], rival_headings[i]
+        #         )
+        #     )
+        
+        # Get n nearest spline points wrt to the agent position
+        # resp = self.tcp_client.send_data(self.)
+        
         # just for debug
         env.plot_env_obs(agent_position, agent_heading, rival_positions, rival_headings)
 
@@ -153,18 +171,35 @@ class RacingAgent_v0:
     def plot_env_obs(
         self, agent_position, agent_heading, rival_positions, rival_headings
     ):        
-        # Draw agent
-        circle = plt.Circle(
-            (agent_position[0], agent_position[1]),
-            0.3,  # radius
-            fill=True,
-            color="blue",
-            linewidth=2,
-        )
-        self.ax.add_patch(circle)
+        img_size = np.array([510, 500]) # (w, h)
+        image = np.zeros((img_size[0], img_size[1], 3), dtype=np.uint8)
+        radius = 3
+        thickness = 2
+        # draw agent at the center of the image
+        agent_pos = int(img_size[0] / 2), int(img_size[1] / 2)
+        cv2.circle(image,
+                   agent_pos,  # center
+                   radius,
+                   (0, 255, 0),  # color
+                   thickness)
+        # draw agent heading
+        agent_head = (agent_heading * 20)[:2] + img_size / 2
+        cv2.line(image, agent_pos, 
+                 (int(agent_head[0]), int(agent_head[1])),
+                 (0, 255, 0), thickness)
+        
+        # draw rivals wrt to the agent
+        for rival_position, rival_heading in zip(rival_positions, rival_headings):
+            rival_head = (rival_position + rival_heading * 20 - agent_position)[:2] + img_size / 2
+            rival_head = (int(rival_head[0]), int(rival_head[1]))
+            rival_a = (rival_position - agent_position)[:2] + img_size / 2            
+            rival_a = (int(rival_a[0]), int(rival_a[1]))
+            cv2.circle(image, rival_a, radius, (255, 0, 0), thickness)
+            cv2.line(image, rival_a, rival_head, (255, 0, 0), thickness)
 
-        self.ax.set_aspect("equal")
-        plt.show(block=False)
+        # Display the image
+        cv2.imshow("Env obs.", image)
+        cv2.waitKey(1)
 
     def send_test_command(self, command_str):
         response = self.tcp_client.send_data(self.commandSet[command_str])
