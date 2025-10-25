@@ -9,6 +9,7 @@ class TcpClient:
     def __init__(self, ip="127.0.0.1", port=8080):
         # Create a TCP/IP socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
         # Define the server address and port to connect to
         self.server_address = (ip, port)
@@ -35,13 +36,11 @@ class TcpClient:
 
         # Send data
         # print('sending "{}"'.format(msg))
-        self.sock.sendall(msg.encode("utf-8"))
-        response = 0
+        self.sock.sendall(msg.encode("utf-8"))        
 
-        # Receive response
+        # Receive response        
         response = self.sock.recv(4096)
-        response = response.decode("utf-8")
-        # print("Received response from server: {}\n".format(response))
+        response = response.decode("utf-8")        
         return response
 
     def close(self):
