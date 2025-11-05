@@ -15,7 +15,15 @@ rad2deg = 57.2957795130823208
 
 class RacingAgent_v0:
 
-    def __init__(self, num_rivals, n_nearest_spline_pts, lidar_max_range):
+    def __init__(
+        self,
+        num_rivals,
+        n_nearest_spline_pts,
+        lidar_max_range,
+        lidar_start_angle=-120,
+        lidar_stop_angle=120,
+        lidar_res=10,
+    ):
         """
         Args:
             num_rivals (int): number of rivals that are present in the race
@@ -24,11 +32,14 @@ class RacingAgent_v0:
             lidar_max_range (float): specifies the max range of rays emitted for ray tracing
                                      (i.e. obstacle detection). Beyond this value no obstacle
                                      is detected.
+            lidar_start_angle (float, deg): the angle of the 1st ray
+            lidar_stop_angle (float, deg): the angle of the last ray
+            beam_resolution (float, deg): the angle between two successive rays which specifies
+            the total number of rays that must emitted
         """
         self.start_time = time.time()
         self.end_time = self.start_time
 
-        self.lidar_max_range = lidar_max_range
         self.fig, self.ax = plt.subplots()
 
         self.num_rivals = num_rivals
@@ -76,13 +87,39 @@ class RacingAgent_v0:
             # <xyz normal direction of the ray>,
             # <float: max range of the ray beyond which obstacle detection is not performed>
             "EmitRay": "11101",
+            # args lvl idx, veh idx
+            # resp: max speed, current speed
+            "Vehicle_GetSpeed": "61812",
         }
+
+        self.lidar_max_range = lidar_max_range
+        self.lidar_start_angle = lidar_start_angle * deg2rad
+        self.lidar_stop_angle = lidar_stop_angle * deg2rad
+        self.lidar_res = lidar_res
         # state:
-        #   - n waypoints in front of the vehicle that must be followed,
-        #   - lidar points
-        #   - ?
-        self.state_dim = 0  # n_waypoints * waypoint_dim + n_lidar_beams
+        #   - agent's 3d position
+        #   - agent's 3d heading
+        #   - next waypoint (3d)
+        #   - range data
+        n_beams = (
+            int((self.lidar_stop_angle - self.lidar_start_angle) / self.lidar_res) + 1
+        )
+        self.state_dim = 3 + 3 + 3 + n_beams
         self.action_dim = 8
+        self.action_set = np.array(
+            [
+                self.veh_forward_cmd,
+                self.veh_backward_cmd,
+                self.veh_left_cmd,
+                self.veh_right_cmd,
+                self.veh_release_forwardbackward_cmd,
+                self.veh_release_leftright_cmd,
+                self.veh_handbrake_cmd,
+                self.veh_release_handbrake_cmd,
+            ]
+        )
+        self.step_count = 0
+        self.max_steps = 40000
 
     def close(self):
         self.tcp_client.close()
@@ -96,24 +133,47 @@ class RacingAgent_v0:
         # send reset command to the racing app
         response = self.tcp_client.send_data(self.command_set["Level_Reload"])
         print("Resetting level, eng. response: {}".format(response))
+        self.step_count = 0
 
         # prepare the initial obs after reset
         obs = self.get_obs()
-        return obs, {}
+        return obs
 
-    def vehicle_forward_cmd(self, lvl_id, veh_id):
+    def veh_forward_cmd(self, lvl_id, veh_id):
         return self.command_set["Vehicle_Forward"] + "," + lvl_id + "," + veh_id
 
-    def vehicle_backward_cmd(self, lvl_id, veh_id):
+    def veh_backward_cmd(self, lvl_id, veh_id):
         return self.command_set["Vehicle_Backward"] + "," + lvl_id + "," + veh_id
 
-    def vehicle_left_cmd(self, lvl_id, veh_id):
+    def veh_left_cmd(self, lvl_id, veh_id):
         return self.command_set["Vehicle_Left"] + "," + lvl_id + "," + veh_id
 
-    def vehicle_right_command(self, lvl_id, veh_id):
+    def veh_right_cmd(self, lvl_id, veh_id):
         return self.command_set["Vehicle_Right"] + "," + lvl_id + "," + veh_id
 
-    def vehicle_get_position_cmd(self, lvl_id, veh_id):
+    def veh_release_forwardbackward_cmd(self, lvl_id, veh_id):
+        return (
+            self.command_set["Vehicle_ReleaseForwadBackward"]
+            + ","
+            + lvl_id
+            + ","
+            + veh_id
+        )
+
+    def veh_release_leftright_cmd(self, lvl_id, veh_id):
+        return (
+            self.command_set["Vehicle_ReleaseLeftRight"] + "," + lvl_id + "," + veh_id
+        )
+
+    def veh_handbrake_cmd(self, lvl_id, veh_id):
+        return self.command_set["Vehicle_Handbrake"] + "," + lvl_id + "," + veh_id
+
+    def veh_release_handbrake_cmd(self, lvl_id, veh_id):
+        return (
+            self.command_set["Vehicle_ReleaseHandbrake"] + "," + lvl_id + "," + veh_id
+        )
+
+    def veh_get_position_cmd(self, lvl_id, veh_id):
         """
         prepares the command for getting the vehicle position
         Args:
@@ -122,7 +182,7 @@ class RacingAgent_v0:
         """
         return self.command_set["Vehicle_GetPosition"] + "," + lvl_id + "," + veh_id
 
-    def vehicle_get_heading_cmd(self, lvl_id, veh_id):
+    def veh_get_heading_cmd(self, lvl_id, veh_id):
         """
         prepares the command for getting the vehicle heading vector
         """
@@ -152,6 +212,27 @@ class RacingAgent_v0:
             + _3dpos
         )
 
+    def get_lap_progress_cmd(self, lvl_id, spline_id, veh_pos):
+        """
+        Args:
+            lvl_id (str): level index
+            spline_id (str): bSpline index
+            veh_pos (str): x,y,z position of the vehicle for which
+                           lap progress is computed
+        Returns:
+            progress (float, in range [0,1]): percentage of the lap that has been
+                              completed by the vehicle
+        """
+        return (
+            self.command_set["Spline_GetWayPercent"]
+            + ","
+            + lvl_id
+            + ","
+            + spline_id
+            + ","
+            + veh_pos
+        )
+
     def get_ray_trace_cmd(self, origin, direction):
         """
         Detect nearest obstacle (if any) along the given direction
@@ -171,31 +252,28 @@ class RacingAgent_v0:
         )
         return command
 
-    def get_range_data(
-        self, ray_origin, zero_heading, start_angle, stop_angle, beam_res
-    ):
+    def get_range_data(self, ray_origin, zero_heading):
         """
         Get range to obstacle (if any) with the specified angle resolution and range
         Args:
             ray_origin (np array): the 3d position at which ray is emitted
             zero_heading (np array): the beam direction at angle zero. This is the same as the
             vehicle heading vector expressed in vehicle's own coord frame
-            start_angle (float, rad): the angle of the 1st ray
-            stop_angle (float, rad): the angle of the last ray
-            beam_resolution (float, rad): the angle between two successive rays which specifies
-            the total number of rays that must emitted
         Returns
             ray_angles_array (np array): the array of angles (radian) at which a ray is emitted
             range_array (np array): the array of range values corresponding to the emitted rays
             collision_array (np array): the array of 3d collision points (if any) corresponding to the emitted rays
-        """
-        print("ray origin: {}, zero heading: {}".format(ray_origin, zero_heading))
+        """        
         ray_angles_array = []
         range_array = []
         collision_array = []
         rot_axis = np.array([0.0, 0.0, 1.0])  # z axis
 
-        for ang in np.arange(start_angle, stop_angle + beam_res, beam_res):
+        for ang in np.arange(
+            self.lidar_start_angle,
+            self.lidar_stop_angle + self.lidar_res,
+            self.lidar_res,
+        ):
             ray_angles_array.append(ang)
             ray_dir = rotate_point_around_axis(zero_heading, rot_axis, ang)
 
@@ -206,8 +284,7 @@ class RacingAgent_v0:
                 ),
                 "{:.3f},{:.3f},{:.3f}".format(ray_dir[0], ray_dir[1], ray_dir[2]),
             )
-            resp_str = self.tcp_client.send_data(ray_trace_cmd)
-            print("ray trace resp: {}\n".format(resp_str))
+            resp_str = self.tcp_client.send_data(ray_trace_cmd)            
             items = resp_str.split(",")
             had_collided, group_id, ray_endpoint = (
                 int(items[0]),
@@ -217,7 +294,7 @@ class RacingAgent_v0:
 
             # just for debug
             agent_pos_str = self.tcp_client.send_data(
-                self.vehicle_get_position_cmd("0", "0")
+                self.veh_get_position_cmd("0", "0")
             )
 
             if had_collided:
@@ -252,71 +329,88 @@ class RacingAgent_v0:
             state = [agent3dPosition, agent3dHeading, next3DbSpline, rangeArray]
         """
         # get agent 3d position
-        agent_pos_str = self.tcp_client.send_data(
-            self.vehicle_get_position_cmd("0", "0")
-        )
-        # print("agent position resp: {}".format(agent_pos_str))
+        agent_pos_str = self.tcp_client.send_data(self.veh_get_position_cmd("0", "0"))        
         items = agent_pos_str.split(",")
         agent_position = np.array([float(items[0]), float(items[1]), float(items[2])])
 
         #  get agent heading
-        resp = self.tcp_client.send_data(self.vehicle_get_heading_cmd("0", "0"))
+        resp = self.tcp_client.send_data(self.veh_get_heading_cmd("0", "0"))
         items = resp.split(",")
-        agent_heading = np.array([float(items[0]), float(items[1]), float(items[2])])
-        # print("agent heading resp: {}".format(resp))
+        agent_heading = np.array([float(items[0]), float(items[1]), float(items[2])])        
 
         # Get nearest spline point wrt to the agent position
         splines_str = self.tcp_client.send_data(
             self.get_nearest_spline_points_cmd("0", "0", agent_pos_str)
-        )
-        print("spline cmd resp: {}".format(splines_str))
+        )        
         items = splines_str.split(",")
         # n_splines = items[0]
-        spline_pnts = np.array(items[1:], dtype=float)        
+        spline_pnts = np.array(items[1:], dtype=float)
 
         # Perform obstacle detection by ray tracing
         ray_angles_array, range_array, collision_array = self.get_range_data(
-            agent_position, agent_heading, -120 * deg2rad, 120 * deg2rad, 10 * deg2rad
+            agent_position, agent_heading
         )
-
-        obs = np.hstack(
-            (
-                agent_position,
-                agent_heading,
-                spline_pnts,
-                range_array
-            )
-        )
+        obs = np.hstack((agent_position, agent_heading, spline_pnts, range_array))
         return obs
 
-    def step(self, action):
+    def step(self, action_idx):
         """
         execute the given action in the env and return the
         new env state as the result
-        """
-        # todo: exec action
+        Args:
+            action_idx (int): action index
 
-        # update the env state
+        Returns:
+            :
+        """
+        # execute chosen action
+        action_cmd = self.action_set[action_idx]
+        resp = self.tcp_client.send_data(action_cmd)
+        print("action executed with response: {}".format(resp))
+
+        # get new env state & reward
         new_obs = self.get_obs()
-        return new_obs, {}
+        reward = self.reward()  # todo
+        self.step_count += 1
+
+        # determine rollout termination status
+        terminated = self.is_rollout_terminated()  # todo
+        truncated = self.is_rollout_truncated  # todo
+        info = {}
+        return new_obs, reward, terminated, truncated, info
+
+    def reward(self):
+        r = 0
+        return r
+
+    def is_rollout_truncated(self):
+        """
+        the current rollout is truncated when
+        the maximum number of time steps is reached
+        """
+        return self.step_count >= self.max_steps
+
+    def is_rollout_terminated(self):
+        terminated = False
+        return terminated
 
     def demo_act(self):
         dt = self.end_time - self.start_time
         if dt < 2:  # wait for 2 secs between changing action
-            cmd = self.vehicle_forward_cmd("0", "0")
+            cmd = self.veh_forward_cmd("0", "0")
         elif 2 <= dt <= 4:
-            cmd = self.vehicle_left_cmd("0", "0")
+            cmd = self.veh_left_cmd("0", "0")
         elif 4 < dt < 6:
-            cmd = self.vehicle_backward_cmd("0", "0")
+            cmd = self.veh_backward_cmd("0", "0")
         else:
-            cmd = self.vehicle_backward_cmd("0", "0")
+            cmd = self.veh_backward_cmd("0", "0")
         resp = env.tcp_client.send_data(cmd)
 
         self.end_time = time.time()
 
         # update the env state
         new_obs = self.get_obs()
-        return new_obs, {}
+        return new_obs
 
     def plot_env_obs(
         self,
@@ -387,7 +481,7 @@ class RacingAgent_v0:
         cv2.imshow("Env obs.", image)
         cv2.waitKey(1)
 
-    def send_test_command(self, command_str):
+    def send_test_cmd(self, command_str):
         response = self.tcp_client.send_data(self.command_set[command_str])
         return response
 
@@ -400,14 +494,11 @@ def test_pos_n_ray_trace(env):
         )
         agent_heading_resp = env.tcp_client.send_data(
             env.vehicle_get_heading_command("0", "0")
-        )
-        print("agent heading resp: {}".format(agent_heading_resp))
-        print("agent position resp: {}".format(agent_pos_str))
+        )        
 
         # ray tracing
         ray_trace_cmd = env.get_ray_trace_command("0.0,103.0,0.7", "1.0,0.0,0.0")
-        resp_str = env.tcp_client.send_data(ray_trace_cmd)
-        print("ray trace resp: {}\n".format(resp_str))
+        resp_str = env.tcp_client.send_data(ray_trace_cmd)        
 
         # get current pose of the agent & rivals
         agent_pos_str = env.tcp_client.send_data(
@@ -415,20 +506,26 @@ def test_pos_n_ray_trace(env):
         )
         agent_heading_resp = env.tcp_client.send_data(
             env.vehicle_get_heading_command("0", "0")
-        )
-        print("agent heading resp: {}".format(agent_heading_resp))
-        print("agent position resp: {}".format(agent_pos_str))
+        )                
 
 
 if __name__ == "__main__":
 
     env = RacingAgent_v0(num_rivals=3, n_nearest_spline_pts=3, lidar_max_range=100.0)
-    obs, _ = env.reset()
+    obs = env.reset()
     try:
-        for i in range(10000):
-            # print("env step: {}-------------------------------------".format(i))
-            # obs, _ = env.step()
-            obs, _ = env.demo_act()
+        for i in range(70000):
+            # print("env step: {}-------------------------------------".format(i))            
+            obs = env.demo_act()
+            veh_id = "0"
+            veh_pos = env.tcp_client.send_data(env.veh_get_position_cmd("0", veh_id))
+            # print("veh_pos: {}".format(veh_pos))
+
+            lap_prog_cmd = env.get_lap_progress_cmd("0", "0", veh_pos)
+            # print("lap progress cmd: {}".format(lap_prog_cmd))
+            lap_progress = env.tcp_client.send_data(lap_prog_cmd)
+            print("lap progress for veh {}: {}".format(veh_id, lap_progress))
+
     except KeyboardInterrupt:
         print("Script aborted by Ctrl+C")
         env.close()
