@@ -23,6 +23,7 @@ class RacingAgent_v0:
         lidar_start_angle=-120,
         lidar_stop_angle=120,
         lidar_res=10,
+        collision_thresh=0.1
     ):
         """
         Args:
@@ -36,6 +37,8 @@ class RacingAgent_v0:
             lidar_stop_angle (float, deg): the angle of the last ray
             beam_resolution (float, deg): the angle between two successive rays which specifies
             the total number of rays that must emitted
+            collision_thresh (float): a lidar ray with range below `collision_thresh` is
+                                      considered as a collision
         """
         self.start_time = time.time()
         self.end_time = self.start_time
@@ -96,15 +99,16 @@ class RacingAgent_v0:
         self.lidar_start_angle = lidar_start_angle * deg2rad
         self.lidar_stop_angle = lidar_stop_angle * deg2rad
         self.lidar_res = lidar_res
+        self.collision_thresh = collision_thresh
         # state:
         #   - agent's 3d position
         #   - agent's 3d heading
         #   - next waypoint (3d)
         #   - range data
-        n_beams = (
+        self.n_beams = (
             int((self.lidar_stop_angle - self.lidar_start_angle) / self.lidar_res) + 1
         )
-        self.state_dim = 3 + 3 + 3 + n_beams
+        self.state_dim = 3 + 3 + 3 + self.n_beams
         self.action_dim = 8
         self.action_set = np.array(
             [
@@ -364,13 +368,14 @@ class RacingAgent_v0:
             :
         """
         # execute chosen action
-        action_cmd = self.action_set[action_idx]
+        action_cmd = self.action_set[action_idx]("0", "0") # lvl_idx, veh_idx
         resp = self.tcp_client.send_data(action_cmd)
-        print("action executed with response: {}".format(resp))
+        print("action {} executed with response: {}".format(
+            self.action_set[action_idx].__name__, resp))
 
         # get new env state & reward
         new_obs = self.get_obs()
-        reward = self.reward()  # todo
+        reward = self.reward(new_obs)  # todo
         self.step_count += 1
 
         # determine rollout termination status
@@ -379,9 +384,46 @@ class RacingAgent_v0:
         info = {}
         return new_obs, reward, terminated, truncated, info
 
-    def reward(self):
-        r = 0
-        return r
+    def sigmoid_fcn(self, x):        
+        """
+        Sigmoid function used in reward computation        
+        """
+        return 1.0 / (1.0 + np.exp(-x))
+    
+    def reward(self, obs):
+        # obstacle avoidance reward
+        range_array = obs[-self.n_beams:]
+        n_collided_rays = np.count_nonzero(
+            range_array[range_array < self.collision_thresh])         
+        r_obs_avoid = 1. - n_collided_rays / self.n_beams
+        assert 0. <= r_obs_avoid <= 1.
+        print("r obstacle avoidance: {}".format(r_obs_avoid))
+        
+        # road following reward        
+        dist = np.linalg.norm(obs[:3] - obs[6:9]) # dist(agentPosition, nextSplinePoint)
+        r_road_follow = -2 * self.sigmoid(dist)
+        assert 0. <= r_road_follow <= 1.
+        print("r road following: {}".format(r_road_follow))
+        
+        # speed reward
+        r_speed = 0 # todo
+        assert 0. <= r_speed <= 1.
+        print("r speed: {}".format(r_speed))
+        
+        # progress reward (percentage of lap completion)
+        lap_prog_cmd = self.get_lap_progress_cmd("0", "0",
+                                                 obs[:3]) # agent position                
+        r_progress = float(env.tcp_client.send_data(lap_prog_cmd))
+        assert 0. <= r_progress <= 1.
+        print("r progress: {}".format(r_progress))
+        
+        # rank reward
+        r_rank = 0 # todo
+        assert 0. <= r_rank <= 1.
+        print("r rank: {}".format(r_rank))
+        
+        r_total = r_obs_avoid + r_road_follow + r_speed + r_progress + r_rank
+        return r_total
 
     def is_rollout_truncated(self):
         """
