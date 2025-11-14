@@ -67,7 +67,7 @@ class DQN:
     def __init__(self,
                  n_train_steps, n_rollout_steps, n_eval_steps,
                  total_timesteps,                 
-                 env, env_name,
+                 env, env_name, env_type,
                  eval_env,
                  obs_dim, obs_dtype, 
                  action_dim, action_dtype, is_action_discrete,
@@ -112,6 +112,7 @@ class DQN:
             path_prefix (str, optional): _description_. Defaults to ".\\results"
         """                                
         # the environment that the agent must learn
+        self.env_type = env_type # needed to address the differences between gym envs and codeArt ones
         self.env = env
         self.env_name = env_name
         self.explore_render = explore_render
@@ -237,10 +238,11 @@ class DQN:
                 # self.env.render()
                 
             # Execute action
-            new_obs, reward, terminated, truncated, info = self.env.step(action)
+            new_obs, reward, terminated, timed_out, info = self.env.step(action)
             # terminated == true: episode ended naturally (goal state is reached)
             # truncated == true: episode ended due to exceeding time limit or other limits
-            done = terminated or truncated                        
+            print("terminate: {}, timed_out: {}".format(terminated, timed_out))
+            done = terminated or timed_out
 
             # Update statistics
             self.steps_so_far += 1
@@ -258,7 +260,7 @@ class DQN:
             obs = new_obs                        
             
             if done:
-                print('steps so far: {}, episode reward: {}, exploration rate: {}'.format(
+                print('Episode done, steps so far: {}, episode reward: {}, exploration rate: {}'.format(
                     self.steps_so_far, self.episode_reward, self.exploration_rate))
                 self.epoch_episode_rewards.append(self.episode_reward)
                 self.episode_reward = 0
@@ -267,13 +269,13 @@ class DQN:
 
                 # Episode done => Reset agent noises, reset environment
                 self.reset()
-                obs = self.env.reset()[0]
+                obs, _ = self.env.reset()
         self.last_obs = obs.copy()
         return is_train_over
         
         
-    def train(self):                        
-        for _ in range(self.n_train_steps):
+    def train(self):                               
+        for _ in range(self.n_train_steps):            
             qloss = self.train_step()
             self.q_losses.append(qloss)        
             
@@ -281,6 +283,7 @@ class DQN:
             soft_update(target=self.target_q_network,
                         source=self.q_network,
                         tau=self.tau)
+        print("trained for {} steps".format(self.n_train_steps))
         
     def train_step(self):
         batch = self.replay_buffer.sample(self.batch_size)
@@ -322,12 +325,12 @@ class DQN:
         self.reset()
         
         # Reset env and set initial state (i.e obs)
-        self.last_obs = self.env.reset()[0]
+        self.last_obs, _ = self.env.reset()
         
         # if eval_env is available, reset it too and set initial evaluation state (i.e.eval_obs)
         eval_obs = None
         if self.eval_env is not None:
-            eval_obs = self.eval_env.reset()[0]
+            eval_obs, _ = self.eval_env.reset()
             # if self.eval_render:
             #     self.eval_env.render()     # (for pyBullet env.) call before env.reset to show a window of the env.
             

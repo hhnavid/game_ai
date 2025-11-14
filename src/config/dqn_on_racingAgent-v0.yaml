@@ -5,7 +5,7 @@ env_id: RacingAgent_v0
 explore_render: 0 # bool 0: false, 1: true
 eval_render: 0 # bool
 # evaluation: 1 # bool
-batch_size: 128
+batch_size: 64
 n_train_steps: 50 # per epoch
 n_eval_steps: 100 # per epoch
 n_rollout_steps: 100 # per epoch

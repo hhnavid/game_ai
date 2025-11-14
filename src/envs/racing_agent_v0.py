@@ -49,6 +49,7 @@ class RacingAgent_v0:
         self.n_nearest_spline_pts = str(n_nearest_spline_pts)
         # create tcp client
         self.tcp_client = TcpClient(ip="127.0.0.1", port=8080)
+
         self.command_set = {
             "Level_Reload": "70001",
             # for the bunch of commands below for moving forward, backward, ...
@@ -95,18 +96,21 @@ class RacingAgent_v0:
             "Vehicle_GetSpeed": "61812",
         }
         self.agent_pos_str = ""
-        self.agent_lap_progress = 0.
+        self.agent_lap_progress = 0.0
+        self.rivals_lap_progress = np.zeros(self.num_rivals)
 
         self.n_beams = int((lidar_stop_angle - lidar_start_angle) / lidar_res) + 1
 
         self.lidar_max_range = lidar_max_range
         self.lidar_start_angle = lidar_start_angle * deg2rad
         self.lidar_stop_angle = lidar_stop_angle * deg2rad
-        self.lidar_res = lidar_res
+        self.lidar_res = lidar_res * deg2rad
         self.collision_thresh = collision_thresh
 
         self.state_dim = 3 + 3 + self.n_beams
+        self.state_dtype = np.float32
         self.action_dim = 8
+        self.action_dtype = np.int64
         self.action_set = np.array(
             [
                 self.veh_forward_cmd,
@@ -120,6 +124,7 @@ class RacingAgent_v0:
             ]
         )
         self.step_count = 0
+        self.reset()
         self.max_steps = 40000
 
     def close(self):
@@ -129,17 +134,18 @@ class RacingAgent_v0:
         """resets the environment state
         Returns:
             obs: initial state after env. reset
-            {}: a dict
+            {}: a dict to be compatible with gym env syntax
         """
         # send reset command to the racing app
         response = self.tcp_client.send_data(self.command_set["Level_Reload"])
         print("Resetting level, eng. response: {}".format(response))
         self.step_count = 0
-        self.agent_lap_progress = 0.
+        self.agent_lap_progress = 0.0
+        self.rivals_lap_progress[:] = 0.0
 
         # prepare the initial obs after reset
         obs = self.get_obs()
-        return obs
+        return obs, {}
 
     def veh_forward_cmd(self, lvl_id, veh_id):
         return self.command_set["Vehicle_Forward"] + "," + lvl_id + "," + veh_id
@@ -375,10 +381,15 @@ class RacingAgent_v0:
         action_cmd = self.action_set[action_idx]("0", "0")  # lvl_idx, veh_idx
         resp = self.tcp_client.send_data(action_cmd)
         print(
-            "action {} executed with response: {}".format(
+            "step: {}, action {} exec resp: {}".format(
+                self.step_count,
                 self.action_set[action_idx].__name__, resp
             )
         )
+
+        # wait a bit for the action to take effect
+        dt_ms = 100.
+        time.sleep(dt_ms / 1000) # seconds
 
         # get new env state & reward
         new_obs = self.get_obs()
@@ -387,7 +398,7 @@ class RacingAgent_v0:
 
         # determine rollout termination status
         terminated = self.is_rollout_terminated()
-        truncated = self.is_rollout_timed_out
+        truncated = self.is_rollout_timed_out()
         info = {}
         return new_obs, reward, terminated, truncated, info
 
@@ -405,13 +416,13 @@ class RacingAgent_v0:
         )
         r_obs_avoid = 1.0 - n_collided_rays / self.n_beams
         assert 0.0 <= r_obs_avoid <= 1.0
-        print("r obstacle avoidance: {}".format(r_obs_avoid))
+        # print("r obstacle avoidance: {}".format(r_obs_avoid))
 
         # road following reward
         dist = np.linalg.norm(obs[:3])  # dist(agentPosition, nextSplinePoint)
         r_road_follow = -2 * self.sigmoid_fcn(dist) + 1
         assert -1.0 <= r_road_follow <= 0.0
-        print("r road following: {}".format(r_road_follow))
+        # print("r road following: {}".format(r_road_follow))
 
         # vehicle speed reward
         speed_cmd = self.get_veh_speed_cmd("0", "0")
@@ -419,22 +430,36 @@ class RacingAgent_v0:
         max_speed, cur_speed = resp_str.split(",")
         r_speed = float(cur_speed) / float(max_speed)
         assert 0.0 <= r_speed <= 1.0
-        print("r speed: {}".format(r_speed))
+        # print("r speed: {}".format(r_speed))
 
         # progress reward (percentage of lap completion)
-        lap_prog_cmd = self.get_lap_progress_cmd("0", "0", # lvl_idx, spline_idx
-                                                 self.agent_pos_str)
+        lap_prog_cmd = self.get_lap_progress_cmd(
+            "0", "0", self.agent_pos_str  # lvl_idx, spline_idx
+        )
         self.agent_lap_progress = float(self.tcp_client.send_data(lap_prog_cmd))
         r_progress = self.agent_lap_progress
         assert 0.0 <= r_progress <= 1.0
-        print("r progress: {}".format(r_progress))
+        # print("r progress: {}".format(r_progress))
 
         # rank reward
-        r_rank = 1.0 / self.get_rank(r_progress)
+        agent_rank = self.get_rank(r_progress)
+        r_rank = 1.0 / agent_rank 
         assert 0.0 <= r_rank <= 1.0
-        print("r rank: {}".format(r_rank))
+        # print("r rank: {}".format(r_rank))
+        print("agent rank: {}".format(agent_rank))
 
-        r_total = r_obs_avoid + r_road_follow + r_speed + r_progress + r_rank
+        coeff_obs = 0.1
+        coeff_road = 0.2
+        coeff_speed = 0.3
+        coeff_progress = 0.1
+        coeff_rank = 0.3
+        r_total = (
+            coeff_obs * r_obs_avoid
+            + coeff_road * r_road_follow
+            + coeff_speed * r_speed
+            + coeff_progress * r_progress
+            + coeff_rank * r_rank
+        ) / (coeff_obs + coeff_road + coeff_speed + coeff_progress + coeff_rank)
         return r_total
 
     def get_rank(self, agent_lap_progress):
@@ -444,10 +469,17 @@ class RacingAgent_v0:
             rival_pos_str = self.tcp_client.send_data(
                 self.veh_get_position_cmd("0", str(i))
             )
-            lap_prog_cmd = self.get_lap_progress_cmd("0", "0", # lvl_idx, spline_idx
-                                                     rival_pos_str)
-            rival_lap_progress = float(self.tcp_client.send_data(lap_prog_cmd))
-            if agent_lap_progress > rival_lap_progress:
+            lap_prog_cmd = self.get_lap_progress_cmd(
+                "0", "0", rival_pos_str  # lvl_idx, spline_idx
+            )
+
+            prgs = float(self.tcp_client.send_data(lap_prog_cmd))
+            # only consider the rivals progress before completing
+            # the 1st lap. After the lap completion, the rivals progress
+            # will be reset which must not be used:
+            if prgs > self.rivals_lap_progress[i - 1]:
+                self.rivals_lap_progress[i - 1] = prgs
+            if agent_lap_progress > self.rivals_lap_progress[i - 1]:
                 # agent's lap rank is higher than ith rival due
                 # to having a higher lap progress
                 rank -= 1
@@ -463,9 +495,15 @@ class RacingAgent_v0:
     def is_rollout_terminated(self):
         """
         the current rollout is terminated when
-        the agent has finished its lap
+        the agent finishes its lap or all of the
+        rivals finish the lap
         """
-        return 1.0 - self.agent_lap_progress < 0.01
+        rivals_finished = False
+        for i in range(self.num_rivals):
+            rivals_finished = rivals_finished or (
+                self.rivals_lap_progress[i - 1] > 0.99
+            )
+        return (1.0 - self.agent_lap_progress < 0.01) or bool(rivals_finished)
 
     def demo_act(self):
         dt = self.end_time - self.start_time
@@ -567,18 +605,17 @@ class RacingAgent_v0:
 if __name__ == "__main__":
 
     env = RacingAgent_v0(num_rivals=3, n_nearest_spline_pts=3, lidar_max_range=100.0)
-    obs = env.reset()
+    obs, _ = env.reset()
     try:
         for i in range(70000):
-            print("env step: {}-------------------------------------".format(i))
+            # print("env step: {}-------------------------------------".format(i))
 
             obs, reward, terminated, timed_out, info = env.step(env.random_action())
 
             veh_id = "1"
             veh_pos = env.tcp_client.send_data(env.veh_get_position_cmd("0", veh_id))
             # print("veh_pos: {}".format(veh_pos))
-            lap_prog_cmd = env.get_lap_progress_cmd("0", "0", veh_pos)
-            lap_progress = env.tcp_client.send_data(lap_prog_cmd)
+            lap_progress = env.rivals_lap_progress[int(veh_id) - 1]
             print("lap progress for veh {}: {}".format(veh_id, lap_progress))
 
     except KeyboardInterrupt:

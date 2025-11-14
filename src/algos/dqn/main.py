@@ -13,24 +13,23 @@ def main():
     # load experiment config from file    
     print("sys.args: {}".format(sys.argv)) 
     args_dict = parse_arguments(sys.argv)
-    if args_dict['env_type'] == 'gym':
+    if args_dict["env_type"] == "gym":
         learn_gym(args_dict)
-    elif args_dict['env_type'] == 'codeArt':
+    elif args_dict["env_type"] == "codeArt":
         learn_codeart(args_dict)
         
         
 def learn_codeart(args_dict):
     # create env    
-    env_class = globals()[args_dict['env_id']]    
-    env = env_class()            
+    env = None
+    if args_dict["env_id"] == "RacingAgent_v0":        
+        env = RacingAgent_v0(num_rivals=3, n_nearest_spline_pts=3, lidar_max_range=60.0)
+    else:
+        raise NotImplementedError   
     
-    response = env.send_test_command("Spline_GetNearestPoints")
-    print("Nearest spline points: {}\n".format(response.decode("utf-8")))
-    
-    response = env.send_test_command("Spline_GetAllPoints")
-    print("All spline points: {}\n".format(response.decode("utf-8")))
-    # setup_dqn(args_dict, env.state_dim, env.action_dim,
-    #           env, eval_env=None)
+    setup_dqn(args_dict, env.state_dim, env.state_dtype,
+              env.action_dim, env.action_dtype,
+              env, "codeArt", eval_env=None)
     return
         
         
@@ -47,12 +46,15 @@ def learn_gym(args_dict):
         # for continuous action spaces, action_dim == action vector dimension        
         action_dim = env.action_space.shape
         
-    setup_dqn(args_dict, state_dim, action_dim,
-              env, eval_env)
+    setup_dqn(args_dict,
+              state_dim, env.observation_space.dtype,
+              action_dim, env.action_space.dtype,
+              env, "gym", eval_env)
     return
         
-def setup_dqn(args_dict, state_dim, action_dim,
-              env, eval_env=None):
+def setup_dqn(args_dict, state_dim, state_dtype,
+              action_dim, action_dtype,
+              env, env_type, eval_env=None):
         
     hidden_layers = []
     for l in args_dict['critic_hidden_layers']:
@@ -67,10 +69,10 @@ def setup_dqn(args_dict, state_dim, action_dim,
               int(args_dict['n_rollout_steps']),
               int(args_dict['n_eval_steps']),
               int(float(args_dict['n_total_timesteps'])),
-              env, args_dict['env_id'],
+              env, args_dict['env_id'], env_type,
               eval_env,
-              state_dim, env.observation_space.dtype,
-              action_dim, env.action_space.dtype,
+              state_dim, state_dtype,
+              action_dim, action_dtype,
               is_action_discrete=True,
               hidden_layers=hidden_layers,
               activation_=activation_,

@@ -43,17 +43,18 @@ class TcpClient:
         response = response.decode("utf-8")        
         return response
 
-    def close(self):
-        print("closing socket...")
+    def close(self):        
         try:
             # gracefully shut down both sending and receiving on the
             # socket, which is good practice before closing
             self.sock.shutdown(socket.SHUT_RDWR)
+            print("shutting down the socket...")
         except Exception as e:
             print(f"Error during shutdown: {e}")
             
         try:
             self.sock.close()  # Close the socket to free resources
+            print("closing the socket...")
         except Exception as e:
             print(f"Error during socket closing: {e}")
         
