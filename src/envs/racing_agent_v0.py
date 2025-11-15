@@ -130,6 +130,9 @@ class RacingAgent_v0:
     def close(self):
         self.tcp_client.close()
 
+    def seed(self):
+        print("RacingAgent evn. doesn't support random seeding...")
+        
     def reset(self):
         """resets the environment state
         Returns:

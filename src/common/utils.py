@@ -1,6 +1,10 @@
 import torch
 from typing import Union
 
+import numpy as np
+import random
+import gymnasium as gym
+
 
 def get_device(device: Union[torch.device, str] = "auto") -> torch.device:
     """
@@ -51,3 +55,21 @@ class LinearSchedule:
 
     def __repr__(self) -> str:
         return f"LinearSchedule(start={self.start}, end={self.end}, end_fraction={self.end_fraction})"
+    
+    
+
+def set_global_seeds(seed, is_cuda_available):
+    """
+    set the seed for python random, pytorch, numpy and gym_custom spaces
+
+    :param seed: (int) the seed
+    """
+    torch.manual_seed(seed)
+    if is_cuda_available: 
+        torch.cuda.manual_seed(123)
+
+    np.random.seed(seed)
+    random.seed(seed)
+    # prng was removed in latest gym version
+    if hasattr(gym.spaces, 'prng'):
+        gym.spaces.prng.seed(seed)
