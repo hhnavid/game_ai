@@ -73,3 +73,17 @@ def set_global_seeds(seed, is_cuda_available):
     # prng was removed in latest gym version
     if hasattr(gym.spaces, 'prng'):
         gym.spaces.prng.seed(seed)
+        
+def get_random_generators_state():
+    """
+    return pseudo random generators state which will be used to resume training
+    """
+    return torch.get_rng_state(), np.random.get_state(), random.getstate()
+
+def set_random_generators_state(torch_state, np_state, py_rnd_state):
+    """
+    resume pseudo random generators state for resuming
+    """
+    torch.set_rng_state(torch_state)
+    np.random.set_state(np_state)
+    random.setstate(py_rnd_state)

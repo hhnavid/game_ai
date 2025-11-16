@@ -1,5 +1,6 @@
 # Code adapted from Gym baseline DDPG
 # ------------------------------------
+import os
 import gymnasium as gym
 import numpy as np
 
@@ -204,22 +205,22 @@ class ReplayBuffer(object):
         Saves the buffer content to a file
         :param save_path: (Str) The path to save the buffer content e.g. '/my_path/'
         """
-        self.prev_states.save(save_path + 'prev_states.npy')
-        self.actions.save(save_path + 'actions.npy')
-        self.rewards.save(save_path + 'rewards.npy')
-        self.nex_states.save(save_path + 'nex_states.npy')
-        self.done.save(save_path + 'done.npy')
+        self.prev_states.save(os.path.join(save_path, 'prev_states.npy'))
+        self.actions.save(os.path.join(save_path, 'actions.npy'))
+        self.rewards.save(os.path.join(save_path, 'rewards.npy'))
+        self.nex_states.save(os.path.join(save_path, 'nex_states.npy'))
+        self.done.save(os.path.join(save_path, 'done.npy'))
 
     def load(self, load_path):
         """
         Loads buffer data from file
         :param load_path: (Str) the path to the file from which buffer data are loaded
         """
-        self.prev_states.load(load_path + 'prev_states.npy')
-        self.actions.load(load_path + 'actions.npy')
-        self.rewards.load(load_path + 'rewards.npy')
-        self.nex_states.load(load_path + 'nex_states.npy')
-        self.done.load(load_path + 'done.npy')
+        self.prev_states.load(os.path.join(load_path, 'prev_states.npy'))
+        self.actions.load(os.path.join(load_path, 'actions.npy'))
+        self.rewards.load(os.path.join(load_path, 'rewards.npy'))
+        self.nex_states.load(os.path.join(load_path, 'nex_states.npy'))
+        self.done.load(os.path.join(load_path, 'done.npy'))
 
     @property
     def nb_entries(self):

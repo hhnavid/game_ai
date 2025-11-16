@@ -17,7 +17,7 @@ from torch.nn import functional as F
 from datetime import datetime
 
 from common.running_mean_std import *
-from common.utils import LinearSchedule, set_global_seeds
+from common.utils import LinearSchedule, set_global_seeds, get_random_generators_state, set_random_generators_state
 from common.save_dict2csv import CSVLogger
 from common.memory_utils import mem_usage_in_mb
 from common.my_replay_buffer import ReplayBuffer
@@ -33,11 +33,10 @@ class QNetwork(nn.Module):
             activation: Network activation function {torch.relu, torch.tanh, ...}
             learning_rate:
         """
-        super(QNetwork, self).__init__()
-
-        self.activation = activation
-
+        super(QNetwork, self).__init__()                
+        
         # create network layers
+        self.activation = activation
         self.layers = nn.Sequential()
         layer_items = []
         for i in range(len(fan_ins) - 1):
@@ -105,6 +104,8 @@ class DQN:
         obs_rms_plot=False,
         path_prefix=".\\results",
         resume=False,
+        checkpoint_every_n_epoch=100,
+        resume_path_prefix=None
     ):
         """
         trains the DQN agent
@@ -154,10 +155,14 @@ class DQN:
 
         date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         run_name = "dqn_" + env_name + "_" + date_str
-        self.save_path_prefix = os.path.join(path_prefix, run_name)
-        if not os.path.exists(self.save_path_prefix):
-            os.makedirs(self.save_path_prefix)
-            print("Create log dir: {}".format(self.save_path_prefix))
+        if resume_path_prefix is None:
+            self.save_path_prefix = os.path.join(path_prefix, run_name)
+            if not os.path.exists(self.save_path_prefix):
+                os.makedirs(self.save_path_prefix)
+                print("Create log dir: {}".format(self.save_path_prefix))
+        else:            
+            self.save_path_prefix = resume_path_prefix
+            print("using existing log dir {}".format(resume_path_prefix))
 
         device_name = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device_name)
@@ -219,9 +224,10 @@ class DQN:
         self.log_interval = log_interval
 
         # Resume stuff
+        self.model_config = {}
         self.resume = resume
-        # self.checkpoint_path = self.save_path_prefix + 'checkpoint/'
-        # self.checkpoint_every_n_epoch = checkpoint_every_n_epoch
+        self.checkpoint_path = os.path.join(self.save_path_prefix, "checkpoint")
+        self.checkpoint_every_n_epoch = checkpoint_every_n_epoch
 
     def init_train_variables(self):
         self.combined_stats = {
@@ -241,7 +247,9 @@ class DQN:
         )
 
         if self.resume:
-            raise NotImplementedError
+            print("Resuming...")
+            self.resum_checkpoint()
+            print("Resuming OK.")
         else:
             self.epochs_so_far = 0  # Total number of epochs performed so far
             self.episodes_so_far = (
@@ -265,14 +273,13 @@ class DQN:
 
             self.eval_episode_reward = 0.0
             # Each item of this list contains sum of immediate rewards for 1 evaluation episode
-            self.eval_episode_rewards = []
-
-            # loss values during the training process
-            self.q_losses = []
+            self.eval_episode_rewards = []            
 
             # Number of explorative steps performed in 1 episode. When episode is done, it's saved in
             #  `self.epoch_episode_steps` list. Next it is reset to 0.
             self.episode_step = 0
+        # loss values during the training process
+        self.q_losses = []
         return
 
     def collect_rollout_steps(self):
@@ -295,7 +302,7 @@ class DQN:
             new_obs, reward, terminated, timed_out, info = self.env.step(action)
             # terminated == true: episode ended naturally (goal state is reached)
             # truncated == true: episode ended due to exceeding time limit or other limits
-            print("terminate: {}, timed_out: {}".format(terminated, timed_out))
+            # print("terminate: {}, timed_out: {}".format(terminated, timed_out))
             done = terminated or timed_out
 
             # Update statistics
@@ -328,8 +335,7 @@ class DQN:
                 self.episode_step = 0
                 self.episodes_so_far += 1
 
-                # Episode done => Reset agent noises, reset environment
-                self.reset()
+                # Episode done => reset environment
                 obs, _ = self.env.reset()
         self.last_obs = obs.copy()
         return is_train_over
@@ -387,9 +393,10 @@ class DQN:
         # create a random seed
         seed = random.randint(0, 2**32-1)        
         set_global_seeds(seed, torch.cuda.is_available())
-        self.env.seed(seed)
-        if self.eval_env is not None:
-            self.eval_env.seed(seed)
+        if self.env_type == "gym":
+            self.env.seed(seed)
+            if self.eval_env is not None:
+                self.eval_env.seed(seed)
         
         # Reset env and set initial state (i.e obs)
         self.last_obs, _ = self.env.reset()
@@ -408,6 +415,9 @@ class DQN:
         while not training_done:
             # This is epoch loop, that every `log_interval` epochs is ended to update `combined_stats`
             for _ in range(self.log_interval):
+                print("epochs so far: {}, episodes so far: {}, steps so far: {}".format(
+                    self.epochs_so_far, self.episodes_so_far, self.steps_so_far
+                ))
                 epoch_start_time = time.time()
                 self.epochs_so_far += 1
 
@@ -444,29 +454,15 @@ class DQN:
             self.print_stats()
 
             # Create resume checkpoint
-            if total_epochs % self.checkpoint_every_n_epoch == 0:
-                self.create_resume_checkpoint(
-                    total_epochs,
-                    total_episodes,
-                    total_steps,
-                    total_hours,
-                    eval_episode_reward,
-                    eval_episode_rewards,
-                    episode_reward,
-                    episode_rewards_history,
-                    eval_episode_rewards_history,
-                    episode_step,
-                    epoch_episode_rewards,
-                    epoch_adaptive_distances,
-                    epoch_episode_steps,
-                )
+            if self.epochs_so_far % self.checkpoint_every_n_epoch == 0:
+                self.create_resume_checkpoint()
 
-    def create_resume_checkpoint(self):???
+    def create_resume_checkpoint(self):
         """
         Create a checkpoint so that an interrupted learning process can be resumed from it
         """
         # Log models
-        model_path = self.save_path_prefix + self.env_name + "_actor_critic_.pth"
+        model_path = os.path.join(self.save_path_prefix, self.env_name + "_actor_critic.pth")
         models_dict = {
             "q_network_state_dict": self.q_network.state_dict(),
             "target_q_network_state_dict": self.target_q_network.state_dict(),
@@ -485,14 +481,14 @@ class DQN:
             self.model_config["reward_rms._count"] = self.reward_rms._count
 
         # Log models config
-        pickle_path = self.save_path_prefix + self.env_name + "_models_config_.pickle"
+        pickle_path = os.path.join(self.save_path_prefix, self.env_name + "_models_config.pickle")
         with open(pickle_path, "wb") as handle:
             pickle.dump(self.model_config, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         # Create checkpoint dir.
         checkpoint_path = self.checkpoint_path
-        if not os.path.exists(checkpoint_path):
-            os.mkdir(checkpoint_path)
+        if not os.path.exists(checkpoint_path):            
+            os.makedirs(checkpoint_path)
 
         # Combined stats is already stored in `[env]_results_.csv` => just make a copy in checkpoint dir.
         combined_stats_file_name = ntpath.basename(
@@ -511,24 +507,21 @@ class DQN:
 
         # learn method variables checkpoint
         learn_method_vars = {
-            "total_epochs": total_epochs,
-            "total_episodes": total_episodes,
-            "total_steps": total_steps,
-            "total_hours": total_hours,
-            "eval_episode_reward": eval_episode_reward,
-            "eval_episode_rewards": eval_episode_rewards,
-            "episode_reward": episode_reward,
-            "episode_rewards_history": episode_rewards_history,
-            "eval_episode_rewards_history": eval_episode_rewards_history,
-            "episode_step": episode_step,
-            "epoch_episode_rewards": epoch_episode_rewards,
-            "epoch_adaptive_distances": epoch_adaptive_distances,
-            "epoch_episode_steps": epoch_episode_steps,
+            "total_epochs": self.epochs_so_far,
+            "total_episodes": self.episodes_so_far,
+            "total_steps": self.steps_so_far,
+            "total_hours": self.total_hours,
+            "eval_episode_reward": self.eval_episode_reward,
+            "eval_episode_rewards": self.eval_episode_rewards,
+            "episode_reward": self.episode_reward,                        
+            "episode_step": self.episode_step,
+            "epoch_episode_rewards": self.epoch_episode_rewards,            
+            "epoch_episode_steps": self.epoch_episode_steps,
             "torch_rnd_state": torch_rnd_state,
             "np_rnd_state": np_rnd_state,
             "py_rnd_state": py_rnd_state,
         }
-        pickle_path = checkpoint_path + "learn_method_vars.pickle"
+        pickle_path = os.path.join(checkpoint_path, "learn_method_vars.pickle")
         with open(pickle_path, "wb") as handle:
             pickle.dump(learn_method_vars, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -541,7 +534,7 @@ class DQN:
             raise Exception("Invalid checkpoint path!")
 
         # learn method variables checkpoint
-        pickle_path = checkpoint_path + "learn_method_vars.pickle"
+        pickle_path = os.path.join(checkpoint_path, "learn_method_vars.pickle")
         with open(pickle_path, "rb") as handle:
             learn_method_vars = pickle.load(handle)
 
@@ -552,33 +545,22 @@ class DQN:
             learn_method_vars["py_rnd_state"],
         )
         # Load models params
-        models_path = self.save_path_prefix + self.env_name + "_actor_critic_.pth"
+        models_path = os.path.join(self.save_path_prefix, self.env_name + "_actor_critic.pth")
         models = torch.load(models_path)
-        self.critic.load_state_dict(models["critic_state_dict"])
-        self.actor.load_state_dict(models["actor_state_dict"])
-        self.target_critic.load_state_dict(models["target_critic_state_dict"])
-        self.target_actor.load_state_dict(models["target_actor_state_dict"])
-        self.actor.optimizer.load_state_dict(models["actor_optim_state_dict"])
-        self.critic.optimizer.load_state_dict(models["critic_optim_state_dict"])
-        if self.param_noise is not None:
-            self.param_noise_actor.load_state_dict(
-                models["param_noise_actor_state_dict"]
-            )
-            self.adaptive_param_noise_actor.load_state_dict(
-                models["adaptive_param_noise_actor_state_dict"]
-            )
-            self.param_noise.current_stddev = models["param_noise_curr_stddev"]
+        self.q_network.load_state_dict(models["q_network_state_dict"])        
+        self.target_q_network.load_state_dict(models["target_q_network_state_dict"])                
+        self.optimizer.load_state_dict(models["q_optim_state_dict"])        
 
         # Load replay buffer content
-        self.buffer.load(checkpoint_path)
+        self.replay_buffer.load(checkpoint_path)
 
         # Load models config
-        pickle_path = self.save_path_prefix + self.env_name + "_models_config_.pickle"
+        pickle_path = os.path.join(self.save_path_prefix, self.env_name + "_models_config.pickle")
         with open(pickle_path, "rb") as handle:
             model_configs = pickle.load(handle)
 
             # Running avg/std
-            transition = self.buffer.sample(1)
+            transition = self.replay_buffer.sample(1)
             if "obs_rms._sum" in model_configs and self.obs_rms is not None:
                 self.obs_rms._sum = model_configs["obs_rms._sum"]
                 self.obs_rms._sumsq = model_configs["obs_rms._sumsq"]
@@ -594,29 +576,25 @@ class DQN:
                     transition["rewards"]
                 )  # To set reward_rms.mean & std
 
-        # Replace combined stats csv file frset_random_generators_stateom existing checkpoint
+        # Replace combined stats csv file from existing checkpoint
         combined_stats_file_name = ntpath.basename(
             self.logger.save_path
         )  # Get the combined_stats csv file name
         shutil.copyfile(
-            src=checkpoint_path + combined_stats_file_name, dst=self.logger.save_path
-        )
-
-        return (
-            learn_method_vars["total_epochs"],
-            learn_method_vars["total_episodes"],
-            learn_method_vars["total_steps"],
-            learn_method_vars["total_hours"],
-            learn_method_vars["eval_episode_reward"],
-            learn_method_vars["eval_episode_rewards"],
-            learn_method_vars["episode_reward"],
-            learn_method_vars["episode_rewards_history"],
-            learn_method_vars["eval_episode_rewards_history"],
-            learn_method_vars["episode_step"],
-            learn_method_vars["epoch_episode_rewards"],
-            learn_method_vars["epoch_adaptive_distances"],
-            learn_method_vars["epoch_episode_steps"],
-        )
+            src=os.path.join(checkpoint_path, combined_stats_file_name),
+            dst=self.logger.save_path
+        )        
+        self.epochs_so_far = learn_method_vars["total_epochs"]
+        self.episodes_so_far = learn_method_vars["total_episodes"]
+        self.steps_so_far = learn_method_vars["total_steps"]
+        self.total_hours = learn_method_vars["total_hours"]
+        self.eval_episode_reward = learn_method_vars["eval_episode_reward"]
+        self.eval_episode_rewards = learn_method_vars["eval_episode_rewards"]
+        self.episode_reward = learn_method_vars["episode_reward"]        
+        self.episode_step = learn_method_vars["episode_step"]
+        self.epoch_episode_rewards = learn_method_vars["epoch_episode_rewards"]            
+        self.epoch_episode_steps = learn_method_vars["epoch_episode_steps"]
+        return        
 
     def get_action(self, obs, deterministic):
         """
@@ -689,7 +667,7 @@ class DQN:
         plt.close()
 
     def plot_stats(self):
-        if not self.return_plot and self.obs_rms_plot:
+        if not self.return_plot and not self.obs_rms_plot:
             return
 
         # load stats

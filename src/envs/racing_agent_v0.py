@@ -23,7 +23,7 @@ class RacingAgent_v0:
         lidar_start_angle=-120,
         lidar_stop_angle=120,
         lidar_res=10,
-        collision_thresh=0.1,
+        collision_thresh=5
     ):
         """
         Args:
@@ -125,14 +125,14 @@ class RacingAgent_v0:
         )
         self.step_count = 0
         self.reset()
-        self.max_steps = 40000
+        self.max_steps = 2 * 40000
 
     def close(self):
         self.tcp_client.close()
 
     def seed(self):
         print("RacingAgent evn. doesn't support random seeding...")
-        
+
     def reset(self):
         """resets the environment state
         Returns:
@@ -383,16 +383,16 @@ class RacingAgent_v0:
         # execute chosen action
         action_cmd = self.action_set[action_idx]("0", "0")  # lvl_idx, veh_idx
         resp = self.tcp_client.send_data(action_cmd)
-        print(
-            "step: {}, action {} exec resp: {}".format(
-                self.step_count,
-                self.action_set[action_idx].__name__, resp
-            )
-        )
+        # print(
+        #     "step: {}, action {} exec resp: {}".format(
+        #         self.step_count,
+        #         self.action_set[action_idx].__name__, resp
+        #     )
+        # )
 
         # wait a bit for the action to take effect
-        dt_ms = 100.
-        time.sleep(dt_ms / 1000) # seconds
+        dt_ms = 100.0
+        time.sleep(dt_ms / 1000)  # seconds
 
         # get new env state & reward
         new_obs = self.get_obs()
@@ -417,21 +417,38 @@ class RacingAgent_v0:
         n_collided_rays = np.count_nonzero(
             range_array[range_array < self.collision_thresh]
         )
+        # print(
+        #     "range array min: {}, max: {}".format(
+        #         np.min(range_array), np.max(range_array)
+        #     )
+        # )
         r_obs_avoid = 1.0 - n_collided_rays / self.n_beams
         assert 0.0 <= r_obs_avoid <= 1.0
         # print("r obstacle avoidance: {}".format(r_obs_avoid))
 
         # road following reward
         dist = np.linalg.norm(obs[:3])  # dist(agentPosition, nextSplinePoint)
-        r_road_follow = -2 * self.sigmoid_fcn(dist) + 1
-        assert -1.0 <= r_road_follow <= 0.0
+
+        # compute the angle between agent heading and vector to the nearest spline.
+        # this is needed so that the agent won't be reward for approaching the spline
+        # point by backward movement
+        head_spline_angle = np.acos(
+            np.dot(obs[:3], obs[3:6]) / (dist * np.linalg.norm(obs[3:6]))
+        )
+        if head_spline_angle > np.pi / 2 or head_spline_angle < -np.pi / 2:
+            backward_move_penalty = 2
+        else:
+            backward_move_penalty = 1
+
+        r_road_follow = -2 * backward_move_penalty * self.sigmoid_fcn(dist) + 1
+        # assert -1.0 <= r_road_follow <= 0.0
         # print("r road following: {}".format(r_road_follow))
 
         # vehicle speed reward
         speed_cmd = self.get_veh_speed_cmd("0", "0")
         resp_str = self.tcp_client.send_data(speed_cmd)
         max_speed, cur_speed = resp_str.split(",")
-        r_speed = float(cur_speed) / float(max_speed)
+        r_speed = 100 * float(cur_speed) / float(max_speed)
         assert 0.0 <= r_speed <= 1.0
         # print("r speed: {}".format(r_speed))
 
@@ -446,16 +463,16 @@ class RacingAgent_v0:
 
         # rank reward
         agent_rank = self.get_rank(r_progress)
-        r_rank = 1.0 / agent_rank 
+        r_rank = 1.0 / agent_rank
         assert 0.0 <= r_rank <= 1.0
         # print("r rank: {}".format(r_rank))
-        print("agent rank: {}".format(agent_rank))
+        # print("agent rank: {}".format(agent_rank))
 
         coeff_obs = 0.1
         coeff_road = 0.2
-        coeff_speed = 0.3
-        coeff_progress = 0.1
-        coeff_rank = 0.3
+        coeff_speed = 0.1
+        coeff_progress = 0.5
+        coeff_rank = 0.1
         r_total = (
             coeff_obs * r_obs_avoid
             + coeff_road * r_road_follow
@@ -463,6 +480,18 @@ class RacingAgent_v0:
             + coeff_progress * r_progress
             + coeff_rank * r_rank
         ) / (coeff_obs + coeff_road + coeff_speed + coeff_progress + coeff_rank)
+        print(
+            "r_obs_avd/collisions: {:.3f}/{}, r_road_flw/dist/angle: {:.3f}/{:.3f}/{:.3f}, r_spd: {:.3f}, r_prog: {:.3f}, r_rank: {:.3f}".format(
+                r_obs_avoid,
+                n_collided_rays,
+                r_road_follow,
+                dist,
+                np.degrees(head_spline_angle),
+                r_speed,
+                r_progress,
+                r_rank,
+            )
+        )
         return r_total
 
     def get_rank(self, agent_lap_progress):

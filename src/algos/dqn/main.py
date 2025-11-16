@@ -23,7 +23,7 @@ def learn_codeart(args_dict):
     # create env    
     env = None
     if args_dict["env_id"] == "RacingAgent_v0":        
-        env = RacingAgent_v0(num_rivals=3, n_nearest_spline_pts=3, lidar_max_range=60.0)
+        env = RacingAgent_v0(num_rivals=3, n_nearest_spline_pts=1, lidar_max_range=60.0)
     else:
         raise NotImplementedError   
     
@@ -65,6 +65,10 @@ def setup_dqn(args_dict, state_dim, state_dtype,
         activation_ = torch.relu    
     else:
         raise NotImplementedError
+    if args_dict['resume']:
+        resume_path_prefix = args_dict['resume_path']
+    else:
+        resume_path_prefix = None
     dqn = DQN(int(args_dict['n_train_steps']), 
               int(args_dict['n_rollout_steps']),
               int(args_dict['n_eval_steps']),
@@ -86,7 +90,13 @@ def setup_dqn(args_dict, state_dim, state_dtype,
               replay_buff_size=int(float(args_dict['replay_buff_size'])),
               explore_render=bool(args_dict['explore_render']),
               eval_render=bool(args_dict['eval_render']),
-              log_interval=int(args_dict['log_interval']))
+              log_interval=int(args_dict['log_interval']),
+              return_plot=bool(args_dict['return_plot']),
+              obs_rms_plot=bool(args_dict['obs_rms_plot']),
+              resume=bool(args_dict['resume']),
+              checkpoint_every_n_epoch=int(args_dict['checkpoint_every_n_epoch']),
+              resume_path_prefix=resume_path_prefix)
+    
     dqn.learn()
     env.close()
     if eval_env is not None:
