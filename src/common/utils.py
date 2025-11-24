@@ -49,8 +49,9 @@ class LinearSchedule:
 
     def __call__(self, progress_remaining: float) -> float:
         if (1 - progress_remaining) > self.end_fraction:
+            print("LinearSchedule call returns self.end: {}".format(self.end))
             return self.end
-        else:
+        else:            
             return self.start + (1 - progress_remaining) * (self.end - self.start) / self.end_fraction
 
     def __repr__(self) -> str:

@@ -326,8 +326,9 @@ class DQN:
 
             if done:
                 print(
-                    "Episode done, steps so far: {}, episode reward: {}, exploration rate: {}".format(
-                        self.steps_so_far, self.episode_reward, self.exploration_rate
+                    "Episode done, steps so far: {}, episode reward: {:.3f}, exp. rate: {:.3f}, greedActRatio: {:.3f}".format(
+                        self.steps_so_far, self.episode_reward, self.exploration_rate, 
+                        self.n_greed_actions / (self.n_greed_actions + self.n_random_actions)
                     )
                 )
                 self.epoch_episode_rewards.append(self.episode_reward)
@@ -335,11 +336,16 @@ class DQN:
                 self.episode_step = 0
                 self.episodes_so_far += 1
 
-                # Episode done => reset environment
+                # Episode done => reset environment                
                 obs, _ = self.env.reset()
+                self.reset()
         self.last_obs = obs.copy()
         return is_train_over
 
+    def reset(self):
+        self.n_greed_actions = 0
+        self.n_random_actions = 0
+        
     def evaluate(self):
         pass
 
@@ -393,13 +399,14 @@ class DQN:
         # create a random seed
         seed = random.randint(0, 2**32-1)        
         set_global_seeds(seed, torch.cuda.is_available())
-        if self.env_type == "gym":
-            self.env.seed(seed)
-            if self.eval_env is not None:
-                self.eval_env.seed(seed)
+        # if self.env_type == "gym":
+        #     self.env.seed(seed)
+        #     if self.eval_env is not None:
+        #         self.eval_env.seed(seed)
         
         # Reset env and set initial state (i.e obs)
         self.last_obs, _ = self.env.reset()
+        self.reset()
 
         # if eval_env is available, reset it too and set initial evaluation state (i.e.eval_obs)
         eval_obs = None
@@ -614,12 +621,14 @@ class DQN:
         else:
             if np.random.rand() < self.exploration_rate:
                 # Select one of the discrete actions randomly
-                action = np.random.choice(self.action_dim)
+                action = np.random.choice(self.action_dim)                
+                self.n_random_actions += 1
             else:
                 # Greedy action selection
                 q_values = self.q_network(norm_obs)
                 action = q_values.argmax(dim=0).reshape(-1)
                 action = action.cpu().data.numpy().astype(np.int64)[0]
+                self.n_greed_actions += 1
         return action
 
     def store_transition(self, curr_obs, action, reward, next_obs, done):
