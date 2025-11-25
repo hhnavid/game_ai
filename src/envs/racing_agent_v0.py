@@ -2,6 +2,8 @@ import sys
 
 sys.path.append("I:/projs/game-ai/src")
 
+import os
+import csv
 import time
 import cv2
 import numpy as np
@@ -23,7 +25,7 @@ class RacingAgent_v0:
         lidar_start_angle=-120,
         lidar_stop_angle=120,
         lidar_res=10,
-        collision_thresh=1.3,  # meters
+        collision_thresh=10., # 4.5 for walls,  # meters
         debug_plot=False,
     ):
         """
@@ -41,6 +43,10 @@ class RacingAgent_v0:
             collision_thresh (float): a lidar ray with range below `collision_thresh` is
                                       considered as a collision
         """
+        # log_path_prefix is set by the RL algorithm
+        # when resum path is set in its constructor
+        self.log_path_prefix = None
+
         self.start_time = time.time()
         self.end_time = self.start_time
 
@@ -51,8 +57,11 @@ class RacingAgent_v0:
         # create tcp client
         self.tcp_client = TcpClient(ip="127.0.0.1", port=8080)
 
+        self.group_ids4ray_trace = {"rival": 1, "wall": 2}
         self.command_set = {
             "Level_Reload": "70001",
+            "Level_Pause": "10101,0",
+            "Level_Play": "10101,1",
             # for the bunch of commands below for moving forward, backward, ...
             # args: lvl idx, vehicle idx
             "Vehicle_Forward": "61804",
@@ -97,7 +106,9 @@ class RacingAgent_v0:
             "Vehicle_GetSpeed": "61812",
         }
         self.agent_pos_str = ""
-        self.agent_position0 = None # initial position of the agent at the start of the lap
+        self.agent_position0 = (
+            None  # initial position of the agent at the start of the lap
+        )
         self.agent_lap_progress = 0.0
         self.rivals_lap_progress = np.zeros(self.num_rivals)
 
@@ -151,9 +162,19 @@ class RacingAgent_v0:
             obs: initial state after env. reset
             {}: a dict to be compatible with gym env syntax
         """
-        # send reset command to the racing app
-        resp = self.tcp_client.send_data(self.command_set["Level_Reload"])
-        print("Resetting level, eng. response: {}".format(resp))
+        while True:
+            # send reset command to the racing app
+            reset_status = self.tcp_client.send_data(self.command_set["Level_Reload"])
+            print("Resetting level, eng. response: {}".format(reset_status))
+            if reset_status == "Successful":
+                break
+
+        # dummy command to discard redundant Successful responses
+        while True:
+            resp = self.tcp_client.send_data(self.veh_get_position_cmd("0", "0"))
+            print("dummy agent position cmd response: {}".format(resp))
+            if resp != "Successful":
+                break
 
         self.step_count = 0
         self.agent_lap_progress = 0.0
@@ -161,17 +182,65 @@ class RacingAgent_v0:
 
         # prepare the initial obs after reset
         obs, _, _, _ = self.get_obs()
-        
-        items = self.agent_pos_str.split(",")        
+
+        items = self.agent_pos_str.split(",")
         self.agent_position0 = np.array(items, dtype=float)
 
-        # reset the trajectories of the last rollout
         if self.debug_plot:
+
+            # reset the trajectories of the last rollout
             self.static_img = np.zeros(
                 (self.img_size[0], self.img_size[1], 3), dtype=np.uint8
             )
 
+            # initialize the nearest spline points log file
+            if self.log_path_prefix is not None:
+                with open(
+                    os.path.join(self.log_path_prefix, "env_log.csv"), "w", newline=""
+                ) as csvfile:
+                    writer = csv.writer(csvfile)
+                    # Write header
+                    writer.writerow(
+                        [
+                            "rival 3d pos.x",
+                            "rival 3d pos.y",
+                            "rival 3d pos.z",
+                            "spline pnt0.x",
+                            "spline pnt0.y",
+                            "spline pnt0.z",
+                            "spline pnt1.x",
+                            "spline pnt1.y",
+                            "spline pnt1.z",
+                            "spline pnt2.x",
+                            "spline pnt2.y",
+                            "spline pnt2.z",
+                        ]
+                    )
+
         return obs, {}
+
+    def pause_(self):
+        """Pause env."""
+        resp = self.tcp_client.send_data(self.level_pause_cmd())
+        print("level pausing response: {}".format(resp))
+
+    def play_(self):
+        """Resume playing the env. after a pause command"""
+        resp = self.tcp_client.send_data(self.level_play_cmd())
+        print("level playing response: {}".format(resp))
+
+    def level_play_cmd(self):
+        """
+        returns command to resume playing the level, physics, ...
+        after a pause command
+        """
+        return self.command_set["Level_Play"]
+
+    def level_pause_cmd(self):
+        """
+        returns command to pause the level rendering, physics, ...
+        """
+        return self.command_set["Level_Pause"]
 
     def veh_forward_cmd(self, lvl_id, veh_id):
         return self.command_set["Vehicle_Forward"] + "," + lvl_id + "," + veh_id
@@ -224,21 +293,15 @@ class RacingAgent_v0:
             self.command_set["Vehicle_GetForwardVector"] + "," + lvl_id + "," + veh_id
         )
 
-    def get_all_spline_points_cmd(self, lvl_id, spline_id):        
+    def get_all_spline_points_cmd(self, lvl_id, spline_id):
         """
         prepares the command for getting all of the spline points
         Args:
             lvl_id (str): level index
-            spline_id (str): spline index        
+            spline_id (str): spline index
         """
-        return (
-            self.command_set["Spline_GetAllPoints"]
-            + ","
-            + lvl_id
-            + ","
-            + spline_id            
-        )
-    
+        return self.command_set["Spline_GetAllPoints"] + "," + lvl_id + "," + spline_id
+
     def get_nearest_spline_points_cmd(self, lvl_id, spline_id, _3dpos):
         """
         prepares the command for getting the n nearest spline points to
@@ -343,7 +406,12 @@ class RacingAgent_v0:
                 int(items[1]),
                 items[2:],
             )
-            if had_collided:
+            # only consider walls (road boundaries and rivals as obstacles)
+
+            if had_collided and (
+                group_id == self.group_ids4ray_trace["rival"]
+                or group_id == self.group_ids4ray_trace["wall"]
+            ):
                 ray_endpoint = np.array(
                     [
                         float(ray_endpoint[0]),
@@ -353,6 +421,19 @@ class RacingAgent_v0:
                 )
                 range_ = np.linalg.norm(ray_endpoint - ray_origin)
             else:
+                # just for debug
+                # ray_endpoint = np.array(
+                #     [
+                #         float(ray_endpoint[0]),
+                #         float(ray_endpoint[1]),
+                #         float(ray_endpoint[2]),
+                #     ],
+                # )
+                # print(
+                #     "group id: {}, range: {}".format(
+                #         group_id, np.linalg.norm(ray_endpoint - ray_origin)
+                #     )
+                # )
                 # added 1 unit so that free space within the lidar
                 # range will be distinguishable from occupied space
                 range_ = self.lidar_max_range + 1
@@ -363,8 +444,7 @@ class RacingAgent_v0:
 
         ray_angles_array = np.array(ray_angles_array)
         range_array = np.array(range_array)
-        collision_array = np.array(collision_array)
-
+        collision_array = np.array(collision_array)                
         return ray_angles_array, range_array, collision_array
 
     def get_nearest_spline_pnts(self, lvl_id, spline_id, veh_3dpos_str):
@@ -394,7 +474,7 @@ class RacingAgent_v0:
             self.veh_get_position_cmd("0", "0")
         )
         items = self.agent_pos_str.split(",")
-        agent_position = np.array(items, dtype=float)        
+        agent_position = np.array(items, dtype=float)
 
         #  get agent heading
         resp = self.tcp_client.send_data(self.veh_get_heading_cmd("0", "0"))
@@ -415,7 +495,7 @@ class RacingAgent_v0:
 
         # Perform obstacle detection by ray tracing
         ray_trace_origin = agent_position.copy()
-        ray_trace_origin[2] -= 0.5
+        ray_trace_origin[2] -= 2
         ray_angles_array, range_array, collision_array = self.get_range_data(
             ray_trace_origin, agent_heading
         )
@@ -430,10 +510,11 @@ class RacingAgent_v0:
                 range_array,
             )
         )
-        # sorted_ranges = np.sort(range_array)
-        # print('lidar min: {}, max: {}'.format(np.min(sorted_ranges[0]), np.max(sorted_ranges[-1])))
+        sorted_ranges = np.sort(range_array)
+        print('lidar min: {}, max: {}'.format(np.min(sorted_ranges[0]), np.max(sorted_ranges[-1])))
 
         if self.debug_plot:
+            rival_id4spline = 0
             rival_positions = np.zeros((self.num_rivals, 3))  # [#rivals x 3]
             rival_headings = np.zeros((self.num_rivals, 3))  # [#rivals x 3]
             for i in range(self.num_rivals):
@@ -448,12 +529,11 @@ class RacingAgent_v0:
                     float(items[2]),
                 )
 
-                if i == 0:
+                if i == rival_id4spline:
                     # Get spline points that are nearest to one of the rivals
                     rival_n_splines, rival_spline_pnts = self.get_nearest_spline_pnts(
                         "0", "0", rival_pos_str
                     )
-                    print("{} nearest spline points to rival: {}".format(rival_n_splines, i))
 
                 # get rival heading
                 resp = self.tcp_client.send_data(
@@ -466,16 +546,28 @@ class RacingAgent_v0:
             if rival_n_splines > 0:
                 rival_spline_pnts = rival_spline_pnts.reshape((rival_n_splines, 3))
             else:
-                rival_spline_pnts = None                
-                
-            if self.step_count > 0: # avoid plotting at the 1st step since agent_position0 hasn't been set yet
+                rival_spline_pnts = None
+
+            # log nearest spline points for the rival
+            if self.log_path_prefix is not None:
+                with open(
+                    os.path.join(self.log_path_prefix, "env_log.csv"), "a", newline=""
+                ) as csvfile:
+                    writer = csv.writer(csvfile)
+                    row = rival_positions[rival_id4spline].tolist()
+                    for j in range(rival_n_splines):
+                        row += rival_spline_pnts[j, :].tolist()
+                    writer.writerow(row)
+            if (
+                self.step_count > 0
+            ):  # avoid plotting at the 1st step since agent_position0 hasn't been set yet
                 self.plot_env_obs(
                     agent_position,
                     agent_heading,
                     rival_positions,
                     rival_headings,
-                    None,  # range_array,
-                    None,  # collision_array,
+                    range_array,
+                    collision_array,
                     spline_pnts,
                     next_spline_pnt,
                     rival_spline_pnts,
@@ -535,8 +627,8 @@ class RacingAgent_v0:
         n_collided_rays = np.count_nonzero(
             range_array[range_array < self.collision_thresh]
         )
-
         r_obs_avoid = 1.0 - n_collided_rays / self.n_beams
+        # r_obs_avoid = np.sum(range_array / self.lidar_max_range) / self.n_beams
 
         # road following reward
         dist = np.linalg.norm(obs[:3])  # dist(agentPosition, nextSplinePoint)
@@ -575,6 +667,7 @@ class RacingAgent_v0:
             print(
                 "Ignoring lap progress since the agent has moved backward toward the starting line!"
             )
+            self.agent_lap_progress = -agt_progress
         # print('agent lap progress: {:.3f}'.format(self.agent_lap_progress))
 
         # rank reward
@@ -590,7 +683,7 @@ class RacingAgent_v0:
         coeff_road = 0.01
         coeff_speed = 1
         coeff_progress = 1
-        coeff_rank = 1
+        # coeff_rank = 1
         coeff_fwd = 1
         r_total = (
             coeff_obs * r_obs_avoid
@@ -600,21 +693,26 @@ class RacingAgent_v0:
             + coeff_progress * self.agent_lap_progress
             # + coeff_rank * r_rank
             + r_time
-        ) / (coeff_obs + coeff_road + coeff_speed + coeff_progress + coeff_rank)
-        # print(
-        #     "obst/#collisions: {:.3f}/{}, road/dist: {:.3f}/{:.3f}, spd/maxSpd: {:.3f}/{:.3f}, fwd: {:.3f}, prog: {:.3f}".format(
-        #         coeff_obs * r_obs_avoid,
-        #         n_collided_rays,
-        #         coeff_road * r_road_follow,
-        #         dist,
-        #         coeff_speed * r_speed,
-        #         max_speed,
-        #         coeff_fwd * r_fwd_move,
-        #         coeff_progress * self.agent_lap_progress,
-        #         # coeff_rank * r_rank
-        #     )
-        # )
-        # print('total reward: {}'.format(r_total))
+        ) / (
+            coeff_obs
+            + coeff_road
+            + coeff_speed
+            + coeff_progress
+            # + coeff_rank
+        )
+        print(
+            "obst/#collisions: {:.3f}/-, road/dist: {:.3f}/{:.3f}, spd/maxSpd: {:.3f}/{:.3f}, fwd: {:.3f}, prog: {:.3f}".format(
+                coeff_obs * r_obs_avoid,
+                # n_collided_rays,
+                coeff_road * r_road_follow,
+                dist,
+                coeff_speed * r_speed,
+                max_speed,
+                coeff_fwd * r_fwd_move,
+                coeff_progress * self.agent_lap_progress,
+                # coeff_rank * r_rank,
+            )
+        )
         return r_total
 
     def get_rank(self):
@@ -706,14 +804,15 @@ class RacingAgent_v0:
         thickness = 2
 
         # draw agent position wrt its initial position
-        agent_pos = (agent_position - self.agent_position0)[:2] * scale_ + self.img_size / 2
+        agent_pos = (agent_position - self.agent_position0)[
+            :2
+        ] * scale_ + self.img_size / 2
         agent_pos = int(agent_pos[1]), int(agent_pos[0])
-        cv2.circle(
-            dynamic_img, agent_pos, radius, (0, 0, 255, 255), thickness
-        )  # center  # color
 
         # draw agent heading
-        agent_head = (agent_position + agent_heading * 20 - self.agent_position0)[:2] * scale_ + self.img_size / 2
+        agent_head = (agent_position + agent_heading * 20 - self.agent_position0)[
+            :2
+        ] * scale_ + self.img_size / 2
         cv2.line(
             dynamic_img,
             agent_pos,
@@ -721,13 +820,12 @@ class RacingAgent_v0:
             (0, 0, 255, 255),
             thickness,
         )
-        cv2.circle(self.static_img, agent_pos, 1, (0, 0, 255, 255), thickness=1)
 
         # draw rivals wrt to the agent start position
         colors = [
-            (5, 143, 255, 255), # orange            
-            (0, 255, 0, 255), # green   
-            (255, 0, 0, 255), # blue                     
+            (5, 143, 255, 255),  # orange
+            (0, 255, 0, 255),  # green
+            (255, 0, 0, 255),  # blue
         ]
         for rival_id, (rival_position, rival_heading) in enumerate(
             zip(rival_positions, rival_headings)
@@ -736,27 +834,38 @@ class RacingAgent_v0:
                 :2
             ] * scale_ + self.img_size / 2
             rival_head = (int(rival_head[1]), int(rival_head[0]))
-            rival_a = (rival_position - self.agent_position0)[:2] * scale_ + self.img_size / 2
+            rival_a = (rival_position - self.agent_position0)[
+                :2
+            ] * scale_ + self.img_size / 2
             rival_a = (int(rival_a[1]), int(rival_a[0]))
             cv2.circle(dynamic_img, rival_a, radius, colors[rival_id], thickness)
             cv2.line(dynamic_img, rival_a, rival_head, colors[rival_id], thickness)
             cv2.circle(self.static_img, rival_a, 1, colors[rival_id], thickness=1)
 
-        # if range_array is not None and collision_array is not None:
-        #     # draw detected obstacles surrounding the agent
-        #     for pnt, rng in zip(collision_array, range_array):
-        #         # transform collision point to the agent frame &
-        #         # then to the cv img frame
-        #         pnt_a = (pnt - agent_position)[:2] * scale_ + self.img_size / 2
-        #         pnt_a = (int(pnt_a[1]), int(pnt_a[0]))
-        #         if rng >= self.lidar_max_range:
-        #             cv2.line(
-        #                 dynamic_img, agent_pos, pnt_a, (0, 255, 0, 255), thickness=1
-        #             )
-        #         else:
-        #             cv2.line(
-        #                 dynamic_img, agent_pos, pnt_a, (0, 0, 255, 255), thickness=1
-        #             )
+        if range_array is not None and collision_array is not None:
+            # draw detected obstacles surrounding the agent
+            for pnt, rng in zip(collision_array, range_array):
+                # transform collision point to the agent frame &
+                # then to the cv img frame
+                pnt_a = (pnt - self.agent_position0)[:2] * scale_ + self.img_size / 2
+                pnt_a = (int(pnt_a[1]), int(pnt_a[0]))
+                if rng >= self.lidar_max_range:
+                    cv2.line(
+                        dynamic_img, agent_pos, pnt_a, (0, 255, 0, 255), thickness=1
+                    )
+                    # cv2.circle(dynamic_img, pnt_a, radius, (255, 255, 255, 255), thickness=1)
+                elif rng < self.collision_thresh:
+                    cv2.line(
+                        dynamic_img, agent_pos, pnt_a, (0, 0, 255, 255), thickness=1
+                    )
+                    # cv2.circle(dynamic_img, pnt_a, radius, (255, 255, 255, 255), thickness=1)
+                else:
+                    cv2.line(
+                        dynamic_img, agent_pos, pnt_a, (0, 128, 128, 255), thickness=1
+                    )
+                    # cv2.circle(dynamic_img, pnt_a, radius, (255, 255, 255, 255), thickness=1)
+        cv2.circle(dynamic_img, agent_pos, radius, (0, 0, 255, 255), thickness)
+        cv2.circle(self.static_img, agent_pos, 1, (0, 0, 255, 255), thickness=1)
 
         # draw spline points nearest to the agent/rival
         if nearest_spline_pnts is not None:
@@ -779,12 +888,12 @@ class RacingAgent_v0:
                     cv2.LINE_AA,
                 )
 
-                if rival_spline_pnts is not None and i < rival_spline_pnts.shape[0] :
-                    spline_pnt = (rival_spline_pnts[i, :] - self.agent_position0)[:2] * scale_ + self.img_size / 2
+                if rival_spline_pnts is not None and i < rival_spline_pnts.shape[0]:
+                    spline_pnt = (rival_spline_pnts[i, :] - self.agent_position0)[
+                        :2
+                    ] * scale_ + self.img_size / 2
                     spline_pnt = (int(spline_pnt[1]), int(spline_pnt[0]))
-                    cv2.circle(
-                        dynamic_img, spline_pnt, radius, colors[0], thickness=1
-                    )
+                    cv2.circle(dynamic_img, spline_pnt, radius, colors[0], thickness=1)
                     cv2.putText(
                         dynamic_img,
                         "sp" + str(i),
@@ -796,7 +905,9 @@ class RacingAgent_v0:
                         cv2.LINE_AA,
                     )
 
-            nxt_pnt = (next_spline_pnt - self.agent_position0)[:2] * scale_ + self.img_size / 2
+            nxt_pnt = (next_spline_pnt - self.agent_position0)[
+                :2
+            ] * scale_ + self.img_size / 2
             nxt_pnt = (int(nxt_pnt[1]), int(nxt_pnt[0]))
             cv2.line(dynamic_img, agent_pos, nxt_pnt, (0, 255, 0, 255), thickness=1)
 

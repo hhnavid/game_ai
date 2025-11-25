@@ -31,7 +31,7 @@ def learn_codeart(args_dict):
             lidar_stop_angle=170,
             lidar_res=10,
             lidar_max_range=100.0,
-            debug_plot=bool(args_dict["debug_plot"]),
+            debug_plot=bool(args_dict["debug_plot"]),            
         )
     else:
         raise NotImplementedError

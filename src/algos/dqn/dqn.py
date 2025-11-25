@@ -163,6 +163,7 @@ class DQN:
         else:            
             self.save_path_prefix = resume_path_prefix
             print("using existing log dir {}".format(resume_path_prefix))
+        self.env.log_path_prefix = self.save_path_prefix
 
         device_name = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device_name)
@@ -429,7 +430,17 @@ class DQN:
                 self.epochs_so_far += 1
 
                 training_done = self.collect_rollout_steps()
+                
+                # pause env state during the training steps
+                if self.env_type == "codeArt":
+                    self.env.pause_()
+                    
                 self.train()
+                
+                # resume env state after training
+                if self.env_type == "codeArt":
+                    self.env.play_()
+                
                 self.evaluate()  # perform evaluation steps
 
                 epoch_end_time = time.time()
