@@ -239,6 +239,7 @@ class DQN:
             "total/steps": 0,
             "total/hours": 0.0,
             "total/mem_usage": 0,
+            "train/q_loss": 0.
         }
         # Logger
         self.logger = CSVLogger(
@@ -271,7 +272,7 @@ class DQN:
             self.epoch_episode_steps = (
                 []
             )  # Each item of this list contains number of steps performed in 1 explorative episode
-
+            
             self.eval_episode_reward = 0.0
             # Each item of this list contains sum of immediate rewards for 1 evaluation episode
             self.eval_episode_rewards = []            
@@ -347,10 +348,30 @@ class DQN:
         self.n_greed_actions = 0
         self.n_random_actions = 0
         
-    def evaluate(self):
-        pass
+    def evaluate(self):        
+        print("Performing evaluation steps>>>>>>>>>>>>>>>>>>>>")
+        obs, _ = self.env.reset()        
+        self.reset()        
+        for i in range(self.n_eval_steps):
+            action = self.get_action(obs, deterministic=True)
+            new_obs, reward, terminated, timed_out, info = self.env.step(action)
+            done = terminated or timed_out
+            if self.env_type =="codeArt":
+                print("eval step: {}, action: {}, obs[:3]: {}".format(
+                    i, self.env.action_set[action].__name__, obs[:3]))
+            # update statistics
+            self.eval_episode_reward += reward            
+            
+            obs = new_obs
+            if done:   
+                self.eval_episode_rewards.append(self.eval_episode_reward)             
+                self.eval_episode_reward = 0.                
+                obs, _ = self.env.reset()        
+                self.reset()
+        print("Evaluation steps finished>>>>>>>>>>>>>>>>>>>>")
 
     def train(self):
+        self.q_losses = []
         for _ in range(self.n_train_steps):
             qloss = self.train_step()
             self.q_losses.append(qloss)
@@ -439,12 +460,13 @@ class DQN:
                 
                 # resume env state after training
                 if self.env_type == "codeArt":
-                    self.env.play_()
-                
-                self.evaluate()  # perform evaluation steps
+                    self.env.play_()                                
 
                 epoch_end_time = time.time()
                 self.total_hours += (epoch_end_time - epoch_start_time) / 3600
+                
+            # perform evaluation steps
+            self.evaluate()  
 
             # Log statistics
             if len(self.epoch_episode_rewards) > 0:
@@ -455,8 +477,9 @@ class DQN:
                 self.combined_stats["total/episodes"] = self.episodes_so_far
                 self.combined_stats["total/steps"] = self.steps_so_far
                 self.combined_stats["total/hours"] = self.total_hours
+                self.combined_stats["train/q_loss"] = np.mean(self.q_losses)
 
-            if self.eval_env is not None and len(self.eval_episode_rewards) > 0:
+            if len(self.eval_episode_rewards) > 0:
                 self.combined_stats["eval/return"] = np.mean(self.eval_episode_rewards)
                 self.combined_stats["eval/episodes"] = len(self.eval_episode_rewards)
 
@@ -479,6 +502,7 @@ class DQN:
         """
         Create a checkpoint so that an interrupted learning process can be resumed from it
         """
+        print("<<<<<<<<Creating checkpoint at step: {}>>>>>>>>".format(self.steps_so_far))               
         # Log models
         model_path = os.path.join(self.save_path_prefix, self.env_name + "_actor_critic.pth")
         models_dict = {
@@ -628,7 +652,8 @@ class DQN:
         if deterministic:
             # Greedy action selection
             q_values = self.q_network(norm_obs)
-            action = q_values.argmax(dim=1).reshape(-1)
+            action = q_values.argmax(dim=0).reshape(-1)
+            action = action.cpu().data.numpy().astype(np.int64)[0]
         else:
             if np.random.rand() < self.exploration_rate:
                 # Select one of the discrete actions randomly
@@ -709,7 +734,7 @@ class DQN:
         plt.figure(fig_title)
         plt.title("Episode reward vs step")
         plt.plot(steps, returns, label="rollout ret.")
-        if self.eval_env is not None and len(eval_returns) > 0:
+        if len(eval_returns) > 0:
             plt.plot(steps, eval_returns, label="eval. ret.")
         plt.xlabel("Steps (thousands)")
         plt.ylabel("Episode reward average")

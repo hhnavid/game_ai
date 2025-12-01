@@ -6,6 +6,7 @@ import torch
 import importlib
 import gymnasium as gym
 from envs.racing_agent_v0 import RacingAgent_v0
+from envs.racing_agent_v1 import RacingAgent_v1
 from common.parse_args import parse_arguments
 from algos.dqn.dqn import DQN
 
@@ -29,6 +30,16 @@ def learn_codeart(args_dict):
             n_nearest_spline_pts=3,
             lidar_start_angle=-180,
             lidar_stop_angle=170,
+            lidar_res=10,
+            lidar_max_range=100.0,
+            debug_plot=bool(args_dict["debug_plot"]),            
+        )
+    elif args_dict["env_id"] == "RacingAgent_v1":        
+        env = RacingAgent_v1(
+            num_rivals=3,
+            n_nearest_spline_pts=3,
+            lidar_start_angle=-180,
+            lidar_stop_angle=180,
             lidar_res=10,
             lidar_max_range=100.0,
             debug_plot=bool(args_dict["debug_plot"]),            
@@ -120,8 +131,8 @@ def setup_dqn(
         tau=float(args_dict["tau"]),
         lr=float(args_dict["lr"]),
         bs=int(args_dict["batch_size"]),
-        exploration_fraction=0.1,
-        exploration_initial_eps=1.0, #1.0,
+        exploration_fraction=0.8, # the ratio of training steps in which explorative actions are taken
+        exploration_initial_eps=0.5, #1.0,
         exploration_final_eps=0.05,
         replay_buff_size=int(float(args_dict["replay_buff_size"])),
         explore_render=bool(args_dict["explore_render"]),
