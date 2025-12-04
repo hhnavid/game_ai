@@ -402,8 +402,8 @@ class DQN:
         norm_obs0 = Tensor(normalize(prev_states, self.obs_rms)).to(self.device)
         norm_obs1 = Tensor(normalize(next_states, self.obs_rms)).to(self.device)
         rewards = Tensor(rewards).to(self.device)
-        actions = Tensor(actions).to(self.device)
-        done = Tensor(done).to(self.device)
+        actions = Tensor(actions).to(self.device)        
+        done = Tensor(done).to(self.device)        
 
         predicted_q = self.q_network(norm_obs0)  # [bs x actionDim]
         # predicted_q = predicted_q[actions.to(torch.int32)] # [bs x 1]
