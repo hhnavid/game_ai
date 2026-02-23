@@ -1,0 +1,36 @@
+# Environment config
+# ====================
+env_type: gym # could be gym or codeArt
+env_id: MountainCarContinuous-v0
+explore_render: 0 # bool 0: false, 1: true
+eval_render: 0 # bool
+debug_plot: 1 # bool, if true, the agent state is drawn as a 2d plot during the `get_obs()` call
+
+# Training config
+# ===================
+# evaluation: 1 # bool
+batch_size: 64
+n_train_steps: 50 # per epoch
+n_eval_steps: 100 # per log interval
+n_rollout_steps: 100 # per epoch
+n_total_timesteps: 1e6 # total number of steps that agent interacts with the env.
+log_interval: 10
+return_plot: 1 # bool
+checkpoint_every_n_epoch: 6
+noise_type: ou_0.2
+# Actor/Critic config
+# ===================
+actor_lr: 0.0001
+critic_lr: 0.001
+critic_hidden_layers: [64, 64]
+critic_activation: ReLU # "ReLU", "Sigmoid", "Tanh", "LeakyReLU", "ELU", "SELU", "GELU", "Softmax", "Softplus",
+actor_hidden_layers: [64, 64]
+actor_activation: ReLU
+replay_buff_size: 1e6
+tau: 0.001
+gamma: 0.99
+normalize_obs: 1 # bool
+obs_rms_plot: 1 # bool, If true, the running avg of observation will be plotted
+
+resume: 0 # bool, if true, training will be continued from the last saved checkpoint
+resume_path: ''

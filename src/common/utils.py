@@ -49,15 +49,17 @@ class LinearSchedule:
 
     def __call__(self, progress_remaining: float) -> float:
         if (1 - progress_remaining) > self.end_fraction:
-            print("LinearSchedule call returns self.end: {}".format(self.end))
+            # print("LinearSchedule call returns self.end: {}".format(self.end))
             return self.end
-        else:            
-            return self.start + (1 - progress_remaining) * (self.end - self.start) / self.end_fraction
+        else:
+            return (
+                self.start
+                + (1 - progress_remaining) * (self.end - self.start) / self.end_fraction
+            )
 
     def __repr__(self) -> str:
         return f"LinearSchedule(start={self.start}, end={self.end}, end_fraction={self.end_fraction})"
-    
-    
+
 
 def set_global_seeds(seed, is_cuda_available):
     """
@@ -66,25 +68,38 @@ def set_global_seeds(seed, is_cuda_available):
     :param seed: (int) the seed
     """
     torch.manual_seed(seed)
-    if is_cuda_available: 
-        torch.cuda.manual_seed(123)
+    if is_cuda_available:
+        torch.cuda.manual_seed(seed)
 
     np.random.seed(seed)
     random.seed(seed)
     # prng was removed in latest gym version
-    if hasattr(gym.spaces, 'prng'):
+    if hasattr(gym.spaces, "prng"):
         gym.spaces.prng.seed(seed)
-        
-def get_random_generators_state():
+
+
+def get_random_generators_state(is_cuda_available):
     """
     return pseudo random generators state which will be used to resume training
     """
-    return torch.get_rng_state(), np.random.get_state(), random.getstate()
+    # todo: add this in case of using gpu: torch.cuda.get_rng_state_all()
+    if is_cuda_available:
+        return (
+            torch.get_rng_state(),
+            np.random.get_state(),
+            random.getstate(),
+            torch.cuda.get_rng_state_all(),
+        )
+    else:
+        return torch.get_rng_state(), np.random.get_state(), random.getstate(), None
 
-def set_random_generators_state(torch_state, np_state, py_rnd_state):
+
+def set_random_generators_state(torch_state, np_state, py_rnd_state, torch_cuda_state):
     """
     resume pseudo random generators state for resuming
     """
     torch.set_rng_state(torch_state)
     np.random.set_state(np_state)
     random.setstate(py_rnd_state)
+    if torch_cuda_state is not None:
+        torch.cuda.set_rng_state(torch_cuda_state[0])
