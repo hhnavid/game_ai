@@ -16,7 +16,7 @@ deg2rad = 0.017453292519943295
 rad2deg = 57.2957795130823208
 
 
-class RacingAgent_v2:
+class RacingAgent_v3:
 
     def __init__(
         self,
@@ -27,6 +27,7 @@ class RacingAgent_v2:
         lidar_stop_angle=170,
         lidar_res=45,
         debug_plot=False,
+        log_name=None,
     ):
         """
         Args:
@@ -44,7 +45,7 @@ class RacingAgent_v2:
         # log_path_prefix is set by the RL algorithm
         # when resume path is set in its constructor
         self.log_path_prefix = None
-        self.log_name = "env_log.csv"        
+        self.log_name = log_name
         # total_step_count is the total number of steps
         # passed since the start of the env => it's NOT
         # reset upon rollout termination
@@ -142,7 +143,7 @@ class RacingAgent_v2:
         # rollout_step_count is used to detect rollout timeout when
         # it exceeds the max_steps per rollout
         self.rollout_step_count = 0
-        self.max_steps = 200000        
+        self.max_steps = 200000
 
         self.debug_plot = debug_plot
         if self.debug_plot:
@@ -166,14 +167,14 @@ class RacingAgent_v2:
         Returns:
             obs: initial state after env. reset
             {}: a dict to be compatible with gym env syntax
-        """        
+        """
         while True:
             # send reset command to the racing app
             cmd = self.command_set["Level_Reload"]
             self.write_log2disk(cmd)
             reset_status = self.tcp_client.send_data(cmd)
             print("Resetting level, eng. response: {}".format(reset_status))
-            self.write_log2disk(reset_status)            
+            self.write_log2disk(reset_status)
             time.sleep(0.3)  # sleep for 300ms to avoid crashing
             if reset_status == "Successful":
                 break
@@ -208,7 +209,7 @@ class RacingAgent_v2:
         cmd = self.get_nearest_spline_points_cmd(lvl_id, spline_id, veh_3dpos_str)
         self.write_log2disk(cmd)
         splines_str = self.tcp_client.send_data(cmd)
-        self.write_log2disk(splines_str)        
+        self.write_log2disk(splines_str)
 
         items = splines_str.split(",")
         n_splines_pnts = int(items[0])
@@ -248,7 +249,7 @@ class RacingAgent_v2:
                 "{:.3f},{:.3f},{:.3f}".format(ray_dir[0], ray_dir[1], ray_dir[2]),
             )
             self.write_log2disk(ray_trace_cmd)
-            resp_str = self.tcp_client.send_data(ray_trace_cmd)            
+            resp_str = self.tcp_client.send_data(ray_trace_cmd)
             self.write_log2disk(resp_str)
 
             items = resp_str.split(",")
@@ -311,7 +312,7 @@ class RacingAgent_v2:
         # get agent 3d position
         cmd = self.veh_get_position_cmd("0", "0")
         self.write_log2disk(cmd)
-        self.agent_pos_str = self.tcp_client.send_data(cmd)        
+        self.agent_pos_str = self.tcp_client.send_data(cmd)
         self.write_log2disk(self.agent_pos_str)
 
         cur_time = time.perf_counter()
@@ -321,7 +322,7 @@ class RacingAgent_v2:
         # get agent speed
         speed_cmd = self.get_veh_speed_cmd("0", "0")
         self.write_log2disk(speed_cmd)
-        resp_str = self.tcp_client.send_data(speed_cmd)        
+        resp_str = self.tcp_client.send_data(speed_cmd)
         self.write_log2disk(resp_str)
 
         max_speed, cur_speed = resp_str.split(",")
@@ -333,7 +334,7 @@ class RacingAgent_v2:
         # get agent's heading
         cmd = self.veh_get_heading_cmd("0", "0")
         self.write_log2disk(cmd)
-        resp = self.tcp_client.send_data(cmd)        
+        resp = self.tcp_client.send_data(cmd)
         self.write_log2disk(resp)
 
         items = resp.split(",")
@@ -349,7 +350,7 @@ class RacingAgent_v2:
         if n_splines > 0:
             spline_pnts = spline_pnts.reshape((n_splines, 3))
         else:
-            spline_pnts = None        
+            spline_pnts = None
 
         # prepare track axis direction vector
         track_direction = spline_pnts[1] - spline_pnts[0]
@@ -379,7 +380,7 @@ class RacingAgent_v2:
         )
         cmd = self.get_spline_width("0", "0")
         self.write_log2disk(cmd)
-        road_width = self.tcp_client.send_data(cmd)        
+        road_width = self.tcp_client.send_data(cmd)
         self.write_log2disk(road_width)
 
         # normalize distance to track central axis to the range [0, 1]
@@ -402,14 +403,14 @@ class RacingAgent_v2:
         # ---------------------------------------------------------------------------------
         cmd = self.get_veh_has_collided_cmd("0", "0", self.group_ids4ray_trace["rival"])
         self.write_log2disk(cmd)
-        coll_resp = self.tcp_client.send_data(cmd)        
+        coll_resp = self.tcp_client.send_data(cmd)
         self.write_log2disk(coll_resp)
 
         collided_with_rivals = int(coll_resp.split(",")[0])
 
         cmd = self.get_veh_has_collided_cmd("0", "0", self.group_ids4ray_trace["wall"])
         self.write_log2disk(cmd)
-        coll_resp = self.tcp_client.send_data(cmd)        
+        coll_resp = self.tcp_client.send_data(cmd)
         self.write_log2disk(coll_resp)
 
         collided_with_walls = int(coll_resp.split(",")[0])
@@ -420,7 +421,7 @@ class RacingAgent_v2:
             "0", "0", self.agent_pos_str  # lvl_idx, spline_idx
         )
         self.write_log2disk(lap_prog_cmd)
-        cur_prog = self.tcp_client.send_data(lap_prog_cmd)        
+        cur_prog = self.tcp_client.send_data(lap_prog_cmd)
         self.write_log2disk(cur_prog)
 
         cur_prog = float(cur_prog)
@@ -445,7 +446,7 @@ class RacingAgent_v2:
                 # get rival position
                 cmd = self.veh_get_position_cmd("0", str(i + 1))
                 self.write_log2disk(cmd)
-                rival_pos_str = self.tcp_client.send_data(cmd)                
+                rival_pos_str = self.tcp_client.send_data(cmd)
                 self.write_log2disk(rival_pos_str)
 
                 items = rival_pos_str.split(",")
@@ -464,7 +465,7 @@ class RacingAgent_v2:
                 # get rival heading
                 cmd = self.veh_get_heading_cmd("0", str(i + 1))
                 self.write_log2disk(cmd)
-                resp = self.tcp_client.send_data(cmd)                
+                resp = self.tcp_client.send_data(cmd)
                 self.write_log2disk(resp)
 
                 items = resp.split(",")
@@ -474,7 +475,7 @@ class RacingAgent_v2:
                 rival_spline_pnts = rival_spline_pnts.reshape((rival_n_splines, 3))
             else:
                 rival_spline_pnts = None
-            
+
             if (
                 self.rollout_step_count > 0
             ):  # avoid plotting at the 1st step since agent_position0 hasn't been set yet
@@ -647,18 +648,17 @@ class RacingAgent_v2:
         # Display the image
         cv2.imshow("Env obs.", out_img)
         cv2.waitKey(1)
-        
+
     def write_log2disk(self, data_str):
         # log data for crash diagnosis
-        if self.log_path_prefix is not None:
+        if self.log_path_prefix is not None and self.log_name is not None:
             with open(
                 os.path.join(self.log_path_prefix, self.log_name), "a", newline=""
             ) as csvfile:
-                writer = csv.writer(csvfile)                
+                writer = csv.writer(csvfile)
                 writer.writerow([data_str])
                 writer.writerow([""])
-                
-                    
+
     def step(self, action_idx):
         """
         execute the given action in the env and return the
@@ -674,7 +674,7 @@ class RacingAgent_v2:
         self.write_log2disk(action_cmd)
         resp = self.tcp_client.send_data(action_cmd)
         self.write_log2disk(resp)
-        
+
         # print(
         #     "step: {}, action {} exec resp: {}".format(
         #         self.step_count,
@@ -702,12 +702,12 @@ class RacingAgent_v2:
         )
         self.rollout_step_count += 1
         self.total_step_count += 1
-        
+
         # time to discard the old log file and open a new file
         if self.total_step_count >= (self.max_steps + 200):
             self.total_step_count = 0
             print("Discarding old env_log file...")
-            if self.log_path_prefix is not None:                                
+            if self.log_path_prefix is not None and self.log_name is not None:
                 file_path = os.path.join(self.log_path_prefix, self.log_name)
                 try:
                     os.remove(file_path)
@@ -717,11 +717,11 @@ class RacingAgent_v2:
                 except PermissionError:
                     print("Permission denied.")
                 except OSError as e:
-                    print(f"Error: {e}")                
+                    print(f"Error: {e}")
 
         # determine rollout termination status
         terminated = self.is_rollout_terminated(collided_with_walls, delta_prog)
-        truncated = self.is_rollout_timed_out()        
+        truncated = self.is_rollout_timed_out()
         if truncated:
             print("rollout is timed out-------------------------------")
         info = {}
@@ -743,16 +743,18 @@ class RacingAgent_v2:
         done = False
         rivals_finished = False
         for i in range(self.num_rivals):
-            rivals_finished = rivals_finished or (self.rivals_lap_progress[i] > 0.99)        
-        done = (
-            (1.0 - self.agent_last_prog < 0.01)
-            or bool(rivals_finished)
-            or delta_prog < 0.0
-        )
+            rivals_finished = rivals_finished or (self.rivals_lap_progress[i] > 0.99)
+        d1 = 1.0 - self.agent_last_prog < 0.01
+        d2 = bool(rivals_finished)
+        d3 = bool(delta_prog < -0.0001)
+        done = d1 or d2 or d3
+
         if done:
-            print("rollout termination conditions: agent prog: {:.3f}, rivals finished: {}, delta prog: {:.3f}".format(
-                self.agent_last_prog, rivals_finished, delta_prog
-            ))
+            print(
+                "rollout termination conditions: agent finished: {}, rivals finished: {}, dprog: {},{}".format(
+                    d1, d2, d3, delta_prog
+                )
+            )
         return done
 
     def get_rank(self):
@@ -760,15 +762,15 @@ class RacingAgent_v2:
         agent_position = np.array(self.agent_pos_str.split(","), dtype=float)
         for i in range(1, self.num_rivals + 1):
             cmd = self.veh_get_position_cmd("0", str(i))
-            self.write_log2disk(cmd)            
-            rival_pos_str = self.tcp_client.send_data(cmd)            
+            self.write_log2disk(cmd)
+            rival_pos_str = self.tcp_client.send_data(cmd)
             self.write_log2disk(rival_pos_str)
 
             lap_prog_cmd = self.get_lap_progress_cmd(
                 "0", "0", rival_pos_str  # lvl_idx, spline_idx
             )
-            self.write_log2disk(lap_prog_cmd)            
-            prgs = self.tcp_client.send_data(lap_prog_cmd)            
+            self.write_log2disk(lap_prog_cmd)
+            prgs = self.tcp_client.send_data(lap_prog_cmd)
             self.write_log2disk(prgs)
 
             prgs = float(prgs)
@@ -806,18 +808,29 @@ class RacingAgent_v2:
         """
         if collided_with_walls:
             r_total = -1
+            print("wall collision")
+        elif collided_with_rivals:
+            r_total = -0.2
+            print("rival collision")
         else:
             # encourage forward speed, penalize lateral speed, penalize going too
             # far from the track centeral axis
-            r_forward = speed_x * np.cos(obs[0])  # vx cos(angle2track)
+            if (
+                np.abs(obs[0]) > np.pi / 2
+            ):  # the car's heading is the opposite of the road forward vector
+                sign = 1                
+            else:  # the car's heading is somewhat aligned with the road forward vector -> the reward of moving align the road forward vector depends on the sign of delta-progress
+                sign = np.sign(delta_prog)
+            r_forward = -1 + sign * speed_x * np.cos(obs[0])  # vx cos(angle2track)
             r_lateral = -np.abs(speed_x * np.sin(obs[0]))  # |vx sin(angle2track)|
-            r_offroad = -speed_x * np.abs(obs[1])  # vx |dist2track|
+            r_offroad = -10 * speed_x * np.abs(obs[1])  # vx |dist2track|
+
             r_total = r_forward + r_lateral + r_offroad
-            # print(
-            #     "r_fwd: {:.3f}, r_lateral: {:.3f}, r_offroad: {:.3f}".format(
-            #         r_forward, r_lateral, r_offroad
-            #     )
-            # )
+            print(
+                "r_fwd: {:.3f}, r_lat: {:.3f}, r_off: {:.3f}, dprog: {}".format(
+                    r_forward, r_lateral, r_offroad, delta_prog
+                )
+            )
 
         # rank reward
         agent_rank = (
@@ -840,7 +853,7 @@ class RacingAgent_v2:
         """Resume playing the env. after a pause command"""
         cmd = self.level_play_cmd()
         self.write_log2disk(cmd)
-        resp = self.tcp_client.send_data(cmd)        
+        resp = self.tcp_client.send_data(cmd)
         self.write_log2disk(resp)
 
         print("level playing response: {}".format(resp))

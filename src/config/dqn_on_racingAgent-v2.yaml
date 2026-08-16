@@ -27,5 +27,5 @@ tau: 0.1
 gamma: 0.9
 normalize_obs: 1 # bool
 obs_rms_plot: 1 # bool, If true, the running avg of observation will be plotted
-resume: 1 # bool, if true, training will be continued from the last saved checkpoint
-resume_path: I:\projs\game-ai\results\dqn_RacingAgent_v2_2025-12-03_16-48-43
+resume: 0 # bool, if true, training will be continued from the last saved checkpoint
+resume_path: 

@@ -230,15 +230,15 @@ class DDPG(object):
         is_train_over = False
         obs = self.last_obs.copy()
 
-        for _ in range(self.n_rollout_steps):
+        for rollout_step in range(self.n_rollout_steps):
             if self.steps_so_far >= self.total_timesteps:  # Training is over so return
                 is_train_over = True
                 break
             
-            if self.steps_so_far < 5000:
+            if self.steps_so_far < 1000:
                 # select random actions                                
                 action = np.random.uniform(-1, 1, self.action_dim)
-                print('random action: {}'.format(action))
+                # print('random action: {}'.format(action))
             else:
                 # Select action
                 action = self.get_action(obs, apply_noise=True)
@@ -254,6 +254,12 @@ class DDPG(object):
             # terminated == true: episode ended naturally (goal state is reached)
             # truncated == true: episode ended due to exceeding time limit or other limits
             done = terminated or timed_out
+            
+            # the following if is just for debug purposes
+            # if rollout_step % 10 == 0:
+            #     self.env.pause_()
+            #     input("Env. paused, press Enter to continue...")
+            #     self.env.play_()
 
             # Update statistics
             self.steps_so_far += 1

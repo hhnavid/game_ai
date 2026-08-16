@@ -8,6 +8,7 @@ import time
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from datetime import datetime
 from network_.sock_ import TcpClient
 from common.tf import rotate_point_around_axis
 
@@ -43,6 +44,7 @@ class RacingAgent_v1:
         # log_path_prefix is set by the RL algorithm
         # when resume path is set in its constructor
         self.log_path_prefix = None
+        self.log_name = None
 
         self.fig, self.ax = plt.subplots()
 
@@ -163,6 +165,10 @@ class RacingAgent_v1:
             obs: initial state after env. reset
             {}: a dict to be compatible with gym env syntax
         """
+        if self.log_path_prefix is not None:
+            date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            self.log_name = "env_log_" + date_str + ".csv"
+
         while True:
             # send reset command to the racing app
             reset_status = self.tcp_client.send_data(self.command_set["Level_Reload"])
@@ -176,11 +182,11 @@ class RacingAgent_v1:
         self.rivals_lap_progress[:] = 0.0
 
         # prepare the initial obs after reset
-        obs, _, _, _ = self.get_obs()
+        obs, _, _, _, _, _ = self.get_obs()
 
         items = self.agent_pos_str.split(",")
         self.agent_position0 = np.array(items, dtype=float)
-        
+
         self.agent_last_pos_time = time.perf_counter()
         self.agent_last_position = self.agent_position0.copy()
 
@@ -193,24 +199,58 @@ class RacingAgent_v1:
             # initialize the nearest spline points log file
             if self.log_path_prefix is not None:
                 with open(
-                    os.path.join(self.log_path_prefix, "env_log.csv"), "w", newline=""
+                    os.path.join(self.log_path_prefix, self.log_name), "w", newline=""
                 ) as csvfile:
                     writer = csv.writer(csvfile)
                     # Write header
                     writer.writerow(
                         [
-                            "rival 3d pos.x",
-                            "rival 3d pos.y",
-                            "rival 3d pos.z",
-                            "spline pnt0.x",
-                            "spline pnt0.y",
-                            "spline pnt0.z",
-                            "spline pnt1.x",
-                            "spline pnt1.y",
-                            "spline pnt1.z",
-                            "spline pnt2.x",
-                            "spline pnt2.y",
-                            "spline pnt2.z",
+                            "agent pos.x",
+                            "agent pos.y",
+                            "agent pos.z",
+                            "agent head.x",
+                            "agent head.y",
+                            "agent head.z",
+                            "agent speed",
+                            "agt spln pnt0.x",
+                            "agt spln pnt0.y",
+                            "agt spln pnt0.z",
+                            "agt spln pnt1.x",
+                            "agt spln pnt1.y",
+                            "agt spln pnt1.z",
+                            "agt spln pnt2.x",
+                            "agt spln pnt2.y",
+                            "agt spln pnt2.z",
+                            "agent ray trace",
+                            "agt wall collide",
+                            "agt rival collide",
+                            "rvl0 pos.x",
+                            "rvl0 pos.y",
+                            "rvl0 pos.z",
+                            "rvl0 head.x",
+                            "rvl0 head.y",
+                            "rvl0 head.z",
+                            "rvl1 pos.x",
+                            "rvl1 pos.y",
+                            "rvl1 pos.z",
+                            "rvl1 head.x",
+                            "rvl1 head.y",
+                            "rvl1 head.z",
+                            "rvl2 pos.x",
+                            "rvl2 pos.y",
+                            "rvl2 pos.z",
+                            "rvl2 head.x",
+                            "rvl2 head.y",
+                            "rvl2 head.z",
+                            "rvl spln pnt0.x",
+                            "rvl spln pnt0.y",
+                            "rvl spln pnt0.z",
+                            "rvl spln pnt1.x",
+                            "rvl spln pnt1.y",
+                            "rvl spln pnt1.z",
+                            "rvl spln pnt2.x",
+                            "rvl spln pnt2.y",
+                            "rvl spln pnt2.z",
                         ]
                     )
 
@@ -318,7 +358,7 @@ class RacingAgent_v1:
         get the current state of the env.
         Returns:
             state (nparray): [stateDim,]
-        """                
+        """
         # angle between car's heading and the track axis, 1D
         # --------------------------------------------------
         # get agent 3d position
@@ -327,7 +367,14 @@ class RacingAgent_v1:
         )
         cur_time = time.perf_counter()
         items = self.agent_pos_str.split(",")
-        agent_position = np.array(items, dtype=float)                
+        agent_position = np.array(items, dtype=float)
+
+        # get agent speed
+        speed_cmd = self.get_veh_speed_cmd("0", "0")
+        resp_str = self.tcp_client.send_data(speed_cmd)
+        max_speed, cur_speed = resp_str.split(",")
+        cur_speed = float(cur_speed)
+        max_speed = float(max_speed)
 
         # agent's heading angle to track direction
         # --------------------------------------------------
@@ -355,7 +402,7 @@ class RacingAgent_v1:
         x_prod = np.cross(agent_heading, track_direction)
         dot_prod = np.dot(agent_heading, track_direction)
         angle2track = np.atan2(np.dot(rot_axis, x_prod), dot_prod)  # radian
-        
+
         # agent velocity along the track direction
         # --------------------------------------------------
         if self.step_count > 0:
@@ -399,12 +446,23 @@ class RacingAgent_v1:
         )
         collided_with_walls = int(coll_resp.split(",")[0])
 
+        # progress reward (percentage of lap completion)
+        # ------------------------------------------------------------------------------
+        lap_prog_cmd = self.get_lap_progress_cmd(
+            "0", "0", self.agent_pos_str  # lvl_idx, spline_idx
+        )
+        cur_prog = float(self.tcp_client.send_data(lap_prog_cmd))
+        if cur_prog - self.agent_last_prog < 0.5:
+            delta_prog = cur_prog - self.agent_last_prog
+        else:
+            # the agent has moved backward toward the starting line -> penalize it
+            print(
+                "Ignoring lap progress since the agent has moved backward toward the starting line!"
+            )
+            delta_prog = (cur_prog - 1) - self.agent_last_prog
+        self.agent_last_prog = cur_prog
+
         obs = np.hstack((agent_velocity, angle2track, dist2track, range_array))
-        # print(
-        #     "obs: spd: {:.3f}, angle2track: {:.3f}, dist2track: {:.3f} ".format(
-        #         cur_speed, angle2track * rad2deg, dist2track
-        #     )
-        # )
 
         if self.debug_plot:
             rival_id4spline = 0
@@ -443,10 +501,20 @@ class RacingAgent_v1:
             # log nearest spline points for the rival
             if self.log_path_prefix is not None:
                 with open(
-                    os.path.join(self.log_path_prefix, "env_log.csv"), "a", newline=""
+                    os.path.join(self.log_path_prefix, self.log_name), "a", newline=""
                 ) as csvfile:
                     writer = csv.writer(csvfile)
-                    row = rival_positions[rival_id4spline].tolist()
+                    row = agent_position.tolist()
+                    row += agent_heading.tolist()
+                    row += [cur_speed]
+                    for j in range(n_splines):
+                        row += spline_pnts[j, :].tolist()
+                    row += [range_array.tolist()]
+                    row += [collided_with_walls]
+                    row += [collided_with_rivals]
+                    for j in range(self.num_rivals):
+                        row += rival_positions[j, :].tolist()
+                        row += rival_headings[j, :].tolist()
                     for j in range(rival_n_splines):
                         row += rival_spline_pnts[j, :].tolist()
                     writer.writerow(row)
@@ -464,7 +532,14 @@ class RacingAgent_v1:
                     spline_pnts[0],
                     rival_spline_pnts,
                 )
-        return obs, collided_with_rivals, collided_with_walls, vel_angle2track
+        return (
+            obs,
+            collided_with_rivals,
+            collided_with_walls,
+            vel_angle2track,
+            max_speed,
+            delta_prog,
+        )
 
     def plot_env_obs(
         self,
@@ -502,7 +577,7 @@ class RacingAgent_v1:
             dynamic_img,
             agent_pos,
             (int(agent_head[1]), int(agent_head[0])),
-            (0, 0, 255, 255),
+            (255, 255, 255, 255),
             thickness,
         )
 
@@ -543,8 +618,8 @@ class RacingAgent_v1:
                         dynamic_img, agent_pos, pnt_a, (0, 0, 255, 255), thickness=1
                     )
 
-        cv2.circle(dynamic_img, agent_pos, radius, (0, 0, 255, 255), thickness)
-        cv2.circle(self.static_img, agent_pos, 1, (0, 0, 255, 255), thickness=1)
+        cv2.circle(dynamic_img, agent_pos, radius, (255, 255, 255, 255), thickness)
+        cv2.circle(self.static_img, agent_pos, 1, (255, 255, 255, 255), thickness=1)
 
         # draw spline points nearest to the agent/rival
         if nearest_spline_pnts is not None:
@@ -632,22 +707,35 @@ class RacingAgent_v1:
         # )
 
         # wait a bit for the action to take effect
-        time.sleep(0.1)  # 100 ms
+        time.sleep(0.07)  # 100 ms
 
         # get new env state & reward
-        new_obs, collided_with_rivals, collided_with_walls, vel_angle2track = self.get_obs()
+        (
+            new_obs,
+            collided_with_rivals,
+            collided_with_walls,
+            vel_angle2track,
+            max_speed,
+            delta_prog,
+        ) = self.get_obs()
         reward = self.reward(
-            new_obs, collided_with_rivals, collided_with_walls, vel_angle2track
+            new_obs,
+            collided_with_rivals,
+            collided_with_walls,
+            vel_angle2track,
+            max_speed,
+            delta_prog,
         )
         self.step_count += 1
 
         # determine rollout termination status
-        terminated = self.is_rollout_terminated()
+        terminated = self.is_rollout_terminated(collided_with_walls, delta_prog)
         truncated = self.is_rollout_timed_out()
         if terminated:
             print("rollout is terminated-------------------------------")
+        if truncated:
+            print("rollout is timed out-------------------------------")
         info = {}
-
         return new_obs, reward, terminated, truncated, info
 
     def is_rollout_timed_out(self):
@@ -657,16 +745,23 @@ class RacingAgent_v1:
         """
         return self.step_count >= self.max_steps
 
-    def is_rollout_terminated(self):
+    def is_rollout_terminated(self, collided_with_walls, delta_prog):
         """
         the current rollout is terminated when
         the agent finishes its lap or all of the
         rivals finish the lap
         """
+        done = False
         rivals_finished = False
         for i in range(self.num_rivals):
             rivals_finished = rivals_finished or (self.rivals_lap_progress[i] > 0.99)
-        return (1.0 - self.agent_last_prog < 0.01) or bool(rivals_finished)
+        done = (
+            (1.0 - self.agent_last_prog < 0.01)
+            or bool(rivals_finished)
+            or collided_with_walls
+            or delta_prog < 0.0
+        )
+        return done
 
     def get_rank(self):
         rank = self.num_rivals + 1
@@ -691,33 +786,70 @@ class RacingAgent_v1:
                 rank -= 1
         return rank
 
-    def reward(self, obs, collided_with_rivals, collided_with_walls, vel_angle2track):
-        """
-        obs = np.hstack(cur_speed, angle2track, dist2track, range_array)
-        Args:
-            obs (np array): env state {cur_speed, angle2track, dist2track, range_array}            
-            collided_with_rivals (int): 1 if the agent has collided with rival(s), 0 o.w.
-            collided_with_walls (int): 1 if the agent has collided with the track boundaries, 0 o.w.
-            vel_angle2track (float, radian): the angle between the car velocity and track direction
-        """
+    def reward(
+        self,
+        obs,
+        collided_with_rivals,
+        collided_with_walls,
+        vel_angle2track,
+        max_speed,
+        delta_prog,
+    ):
         # reward for vehicle speed along track direction
         vel_mag = np.linalg.norm(obs[:3])
-        # print("velocity mag: {:.3f}, velocity_ang2track: {:.3f}".format(vel_mag, vel_angle2track * rad2deg))
-        r_speed =  0.1 * vel_mag * np.cos(vel_angle2track)
-        
+        r_speed = vel_mag * np.cos(vel_angle2track)
+        # print("vel_mag: {:.3f}, vel along track: {:.3f}".format(vel_mag, r_speed))
+
         # penalty for agent heading difference with track direction
+        c_ang2trk = 0.1
         cos_ang2track = np.cos(obs[3])
-        r_angle2track = 0.3 * cos_ang2track
-
-        # penalty for distance from the track central axis
-        r_dist2center = -0.1 * obs[4]        
-
-        # penalty for getting too close to obstacles
-        min_lidar_range = np.min(obs[5:])
-        r_obs_avoid = -0.2 / (min_lidar_range + 0.0001)
+        r_angle2track = c_ang2trk * cos_ang2track
 
         # penalty for colliding with track boundaries or other rivals
-        r_collision = -10 * collided_with_walls - 3 * collided_with_rivals
+        c_col = 1.0
+        r_collision = c_col * (
+            -100.0 * collided_with_walls - 0.2 * collided_with_rivals
+        )
+
+        if delta_prog < 0.0:
+            c_prog = 1.0
+            r_prog = -50.0
+        else:
+            c_prog = 100.0
+            r_prog = c_prog * delta_prog - 0.1
+
+        # rank reward
+        agent_rank = (
+            self.get_rank()
+        )  # DON'T COMMENT THIS LINE! IT'S NEEDED FOR CHECKING ROLLOUT TERMINATION CONDITION
+        # r_rank = 1.0 / agent_rank
+
+        r_total = (r_angle2track + r_collision + r_prog) / (c_ang2trk + c_col + c_prog)
+        print(
+            "r_ang2track: {:.3f}, r_coll: {:.3f}, r_prog: {:.3f}".format(
+                r_angle2track, r_collision, r_prog
+            )
+        )
+        return r_total
+
+    def reward3(
+        self, obs, collided_with_rivals, collided_with_walls, vel_angle2track, max_speed
+    ):
+        # reward for vehicle speed along track direction
+        vel_mag = np.linalg.norm(obs[:3])
+        r_speed = vel_mag * np.cos(vel_angle2track)
+        # print("vel_mag: {:.3f}, vel along track: {:.3f}".format(vel_mag, r_speed))
+
+        # penalty for agent heading difference with track direction
+        c_ang2trk = 0.1
+        cos_ang2track = np.cos(obs[3])
+        r_angle2track = c_ang2trk * cos_ang2track
+
+        # penalty for colliding with track boundaries or other rivals
+        c_col = 1.0
+        r_collision = c_col * (
+            -100.0 * collided_with_walls - 0.2 * collided_with_rivals
+        )
 
         # progress reward (percentage of lap completion)
         lap_prog_cmd = self.get_lap_progress_cmd(
@@ -732,8 +864,76 @@ class RacingAgent_v1:
                 "Ignoring lap progress since the agent has moved backward toward the starting line!"
             )
             r_prog = (cur_prog - 1) - self.agent_last_prog
-        r_prog *= 10
+        if r_prog < 0.0:
+            c_prog = 1000.0
+        else:
+            c_prog = 100.0
+        r_prog = r_prog * c_prog - 0.1
         self.agent_last_prog = cur_prog
+
+        # rank reward
+        agent_rank = (
+            self.get_rank()
+        )  # DON'T COMMENT THIS LINE! IT'S NEEDED FOR CHECKING ROLLOUT TERMINATION CONDITION
+        # r_rank = 1.0 / agent_rank
+
+        r_total = (r_angle2track + r_collision + r_prog) / (c_ang2trk + c_col + c_prog)
+        print(
+            "r_ang2track: {:.3f}, r_coll: {:.3f}, r_prog: {:.3f}".format(
+                r_angle2track, r_collision, r_prog
+            )
+        )
+        return r_total
+
+    def reward2(
+        self, obs, collided_with_rivals, collided_with_walls, vel_angle2track, max_speed
+    ):
+        """
+        obs = np.hstack(cur_speed, angle2track, dist2track, range_array)
+        Args:
+            obs (np array): env state {cur_speed, angle2track, dist2track, range_array}
+            collided_with_rivals (int): 1 if the agent has collided with rival(s), 0 o.w.
+            collided_with_walls (int): 1 if the agent has collided with the track boundaries, 0 o.w.
+            vel_angle2track (float, radian): the angle between the car velocity and track direction
+        """
+        # reward for vehicle speed along track direction
+        vel_mag = np.linalg.norm(obs[:3])
+        # print("velocity mag: {:.3f}, velocity_ang2track: {:.3f}".format(vel_mag, vel_angle2track * rad2deg))
+        c_spd = 10.0
+        r_speed = c_spd * vel_mag * np.cos(vel_angle2track) / max_speed
+
+        # penalty for agent heading difference with track direction
+        c_ang2trk = 0.5
+        cos_ang2track = np.cos(obs[3])
+        r_angle2track = c_ang2trk * cos_ang2track
+
+        # penalty for distance from the track central axis
+        c_dist2cent = 0.1
+        r_dist2center = -c_dist2cent * obs[4]
+
+        # penalty for getting too close to obstacles
+        c_min_rng = 1.0
+        min_lidar_range = np.min(obs[5:])
+        r_obs_avoid = -c_min_rng / (min_lidar_range + 0.0001)
+
+        # penalty for colliding with track boundaries or other rivals
+        c_col = 1.0
+        r_collision = c_col * (-10.0 * collided_with_walls - 2.0 * collided_with_rivals)
+
+        # progress reward (percentage of lap completion)
+        lap_prog_cmd = self.get_lap_progress_cmd(
+            "0", "0", self.agent_pos_str  # lvl_idx, spline_idx
+        )
+        cur_prog = float(self.tcp_client.send_data(lap_prog_cmd))
+        if cur_prog - self.agent_last_prog >= 0.5:
+            # the agent has moved backward toward the starting line -> penalize it
+            print(
+                "Ignoring lap progress since the agent has moved backward toward the starting line!"
+            )
+            cur_prog = cur_prog - 1.0
+        self.agent_last_prog = cur_prog
+        c_prog = 1.0
+        r_prog = c_prog * cur_prog
 
         # rank reward
         agent_rank = (
@@ -743,10 +943,16 @@ class RacingAgent_v1:
 
         r_total = (
             r_speed + r_dist2center + r_angle2track + r_obs_avoid + r_collision + r_prog
-        )
+        ) / (c_spd + c_ang2trk + c_dist2cent + c_min_rng + c_col + c_prog)
         print(
-            "r_spd: {:.3f}, r_dist2trk: {:.3f}, r_ang2trk: {:.3f}, r_obs: {:.3f}, r_coll: {:.3f}, r_prog: {:.3f}".format(
-                r_speed, r_dist2center, r_angle2track, r_obs_avoid, r_collision, r_prog
+            "r_spd: {:.3f}, r_dist2trk: {:.3f}, r_ang2trk: {:.3f}, r_obs: {:.3f}, r_coll: {:.3f}, r_prog: {:.3f}, r_tot: {:.3f}".format(
+                r_speed,
+                r_dist2center,
+                r_angle2track,
+                r_obs_avoid,
+                r_collision,
+                r_prog,
+                r_total,
             )
         )
         return r_total
@@ -774,7 +980,7 @@ class RacingAgent_v1:
         """
         return self.command_set["Level_Pause"]
 
-    def veh_forward_cmd(self, lvl_id, veh_id):
+    def veh_forward_cmd(self, lvl_id, veh_id):                
         return self.command_set["Vehicle_Forward"] + "," + lvl_id + "," + veh_id
 
     def veh_backward_cmd(self, lvl_id, veh_id):

@@ -44,7 +44,7 @@ class RacingAgent_v0:
                                       considered as a collision
         """
         # log_path_prefix is set by the RL algorithm
-        # when resum path is set in its constructor
+        # when resume path is set in its constructor
         self.log_path_prefix = None
 
         self.start_time = time.time()
@@ -109,7 +109,7 @@ class RacingAgent_v0:
         self.agent_position0 = (
             None  # initial position of the agent at the start of the lap
         )
-        self.agent_lap_progress = 0.0
+        self.agent_last_prog = 0.0
         self.rivals_lap_progress = np.zeros(self.num_rivals)
 
         self.n_beams = int((lidar_stop_angle - lidar_start_angle) / lidar_res) + 1
@@ -148,7 +148,7 @@ class RacingAgent_v0:
             self.img_size = None
             self.static_img = None
         self.reset()
-        self.max_steps = 100000
+        self.max_steps = 200000
 
     def close(self):
         self.tcp_client.close()
@@ -167,17 +167,10 @@ class RacingAgent_v0:
             reset_status = self.tcp_client.send_data(self.command_set["Level_Reload"])
             print("Resetting level, eng. response: {}".format(reset_status))
             if reset_status == "Successful":
-                break
-
-        # dummy command to discard redundant Successful responses
-        while True:
-            resp = self.tcp_client.send_data(self.veh_get_position_cmd("0", "0"))
-            print("dummy agent position cmd response: {}".format(resp))
-            if resp != "Successful":
-                break
+                break        
 
         self.step_count = 0
-        self.agent_lap_progress = 0.0
+        self.agent_last_prog = 0.0
         self.rivals_lap_progress[:] = 0.0
 
         # prepare the initial obs after reset
@@ -420,6 +413,8 @@ class RacingAgent_v0:
                     ],
                 )
                 range_ = np.linalg.norm(ray_endpoint - ray_origin)
+                # if group_id == 1:
+                #     print("collided with a rival")
             else:
                 # just for debug
                 # ray_endpoint = np.array(
@@ -495,7 +490,7 @@ class RacingAgent_v0:
 
         # Perform obstacle detection by ray tracing
         ray_trace_origin = agent_position.copy()
-        ray_trace_origin[2] -= 2
+        # ray_trace_origin[2] -= 2.
         ray_angles_array, range_array, collision_array = self.get_range_data(
             ray_trace_origin, agent_heading
         )
@@ -510,8 +505,8 @@ class RacingAgent_v0:
                 range_array,
             )
         )
-        sorted_ranges = np.sort(range_array)
-        print('lidar min: {}, max: {}'.format(np.min(sorted_ranges[0]), np.max(sorted_ranges[-1])))
+        # sorted_ranges = np.sort(range_array)
+        # print('lidar min: {}, max: {}'.format(np.min(sorted_ranges[0]), np.max(sorted_ranges[-1])))
 
         if self.debug_plot:
             rival_id4spline = 0
@@ -606,6 +601,8 @@ class RacingAgent_v0:
         # determine rollout termination status
         terminated = self.is_rollout_terminated()
         truncated = self.is_rollout_timed_out()
+        if terminated:
+            print("rollout is terminated-------------------------------")
         info = {}
 
         return new_obs, reward, terminated, truncated, info
@@ -641,7 +638,7 @@ class RacingAgent_v0:
         # if head_spline_angle > np.pi / 2 or head_spline_angle < -np.pi / 2:
         #     backward_move_penalty = 2
         # else:
-        backward_move_penalty = 1
+        # backward_move_penalty = 1
         # r_road_follow = -2 * backward_move_penalty * self.sigmoid_fcn(dist / 10) + 1
         r_road_follow = -dist
 
@@ -659,16 +656,16 @@ class RacingAgent_v0:
         lap_prog_cmd = self.get_lap_progress_cmd(
             "0", "0", self.agent_pos_str  # lvl_idx, spline_idx
         )
-        agt_progress = float(self.tcp_client.send_data(lap_prog_cmd))
-        if agt_progress - self.agent_lap_progress < 0.5:
-            self.agent_lap_progress = agt_progress
+        cur_prog = float(self.tcp_client.send_data(lap_prog_cmd))
+        if cur_prog - self.agent_last_prog < 0.5:
+            r_prog = cur_prog - self.agent_last_prog            
         else:
             # the agent has moved backward toward the starting line -> ignore the lap progress jumping to 0.99
             print(
                 "Ignoring lap progress since the agent has moved backward toward the starting line!"
             )
-            self.agent_lap_progress = -agt_progress
-        # print('agent lap progress: {:.3f}'.format(self.agent_lap_progress))
+            r_prog = (cur_prog - 1) - self.agent_last_prog
+        self.agent_last_prog = cur_prog
 
         # rank reward
         agent_rank = (
@@ -677,42 +674,43 @@ class RacingAgent_v0:
         # r_rank = 1.0 / agent_rank
 
         # time penalty (force the agent to finish as fast as possible)
-        r_time = 1 - self.step_count / self.max_steps
+        # r_time = 1 - self.step_count / self.max_steps
 
         coeff_obs = 1
         coeff_road = 0.01
         coeff_speed = 1
-        coeff_progress = 1
+        coeff_progress = 100
         # coeff_rank = 1
         coeff_fwd = 1
+        coeff_time = 0.1
         r_total = (
             coeff_obs * r_obs_avoid
             + coeff_road * r_road_follow
             + coeff_speed * r_speed
-            + coeff_fwd * r_fwd_move
-            + coeff_progress * self.agent_lap_progress
+            + coeff_fwd * r_fwd_move +
+            coeff_progress * r_prog
             # + coeff_rank * r_rank
-            + r_time
+            # + coeff_time * r_time
         ) / (
             coeff_obs
             + coeff_road
             + coeff_speed
+            + coeff_fwd
             + coeff_progress
             # + coeff_rank
+            # + coeff_time
         )
-        print(
-            "obst/#collisions: {:.3f}/-, road/dist: {:.3f}/{:.3f}, spd/maxSpd: {:.3f}/{:.3f}, fwd: {:.3f}, prog: {:.3f}".format(
-                coeff_obs * r_obs_avoid,
-                # n_collided_rays,
-                coeff_road * r_road_follow,
-                dist,
-                coeff_speed * r_speed,
-                max_speed,
-                coeff_fwd * r_fwd_move,
-                coeff_progress * self.agent_lap_progress,
-                # coeff_rank * r_rank,
-            )
-        )
+        # print("obst/#collisions: {:.3f}/{}, road/dist: {:.3f}/{:.3f}, speed: {:.3f}, fwd: {:.3f}, prog: {:.3f}".format(
+        #         coeff_obs * r_obs_avoid,
+        #         n_collided_rays,
+        #         coeff_road * r_road_follow,
+        #         dist,
+        #         coeff_speed * r_speed,                
+        #         coeff_fwd * r_fwd_move,                
+        #         coeff_progress * r_prog,
+        #         # coeff_rank * r_rank,
+        #     )
+        # )
         return r_total
 
     def get_rank(self):
@@ -732,7 +730,7 @@ class RacingAgent_v0:
             # will be reset which must not be used:
             if prgs > self.rivals_lap_progress[i - 1]:
                 self.rivals_lap_progress[i - 1] = prgs
-            if self.agent_lap_progress > self.rivals_lap_progress[i - 1]:
+            if self.agent_last_prog > self.rivals_lap_progress[i - 1]:
                 # agent's lap rank is higher than ith rival due
                 # to having a higher lap progress
                 rank -= 1
@@ -742,7 +740,7 @@ class RacingAgent_v0:
         """
         the current rollout is timed out (truncated) when
         the maximum number of time steps is reached
-        """
+        """        
         return self.step_count >= self.max_steps
 
     def is_rollout_terminated(self):
@@ -754,7 +752,7 @@ class RacingAgent_v0:
         rivals_finished = False
         for i in range(self.num_rivals):
             rivals_finished = rivals_finished or (self.rivals_lap_progress[i] > 0.99)
-        return (1.0 - self.agent_lap_progress < 0.01) or bool(rivals_finished)
+        return (1.0 - self.agent_last_prog < 0.01) or bool(rivals_finished)
 
     def demo_act(self):
         dt = self.end_time - self.start_time

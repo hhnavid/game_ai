@@ -1,9 +1,10 @@
 # Environment config
 # ====================
 env_type: codeArt # could be gym or codeArt
-env_id: RacingAgentContinuous_v2
+env_id: RacingAgentContinuous_v3
 explore_render: 0 # bool 0: false, 1: true
 eval_render: 0 # bool
+randomize_init_pos: 0 # bool, if true, the agent's initial position at the time of env. reset is set randomly
 debug_plot: 1 # bool, if true, the agent state is drawn as a 2d plot during the `get_obs()` call
 
 # Training config

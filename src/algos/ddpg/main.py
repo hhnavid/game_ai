@@ -9,6 +9,8 @@ import numpy as np
 import gymnasium as gym
 
 from envs.racing_agent_cont_v2 import RacingAgentContinuous_v2
+from envs.racing_agent_cont_v3 import RacingAgentContinuous_v3
+from envs.racing_agent_cont_v4 import RacingAgentContinuous_v4
 
 from common.parse_args import parse_arguments
 from algos.ddpg.ddpg import DDPG
@@ -36,6 +38,30 @@ def learn_codeart(args_dict):
             lidar_start_angle=-180,
             lidar_stop_angle=180,
             lidar_res=18,
+            debug_plot=bool(args_dict["debug_plot"]),
+            write_log=False # don't log socket cmd send/recv
+        )
+    if args_dict["env_id"] == "RacingAgentContinuous_v3":
+        env = RacingAgentContinuous_v3(
+            num_rivals=3,
+            n_nearest_spline_pts=3,
+            lidar_max_range=200.0,
+            lidar_start_angle=-180,
+            lidar_stop_angle=180,
+            lidar_res=18,
+            randomize_init_pos=bool(args_dict["randomize_init_pos"]),
+            debug_plot=bool(args_dict["debug_plot"]),
+            write_log=False # don't log socket cmd send/recv
+        )
+    if args_dict["env_id"] == "RacingAgentContinuous_v4":
+        env = RacingAgentContinuous_v4(
+            num_rivals=3,
+            n_nearest_spline_pts=3,
+            lidar_max_range=200.0,
+            lidar_start_angle=-180,
+            lidar_stop_angle=180,
+            lidar_res=18,
+            randomize_init_pos=bool(args_dict["randomize_init_pos"]),
             debug_plot=bool(args_dict["debug_plot"]),
             write_log=False # don't log socket cmd send/recv
         )
