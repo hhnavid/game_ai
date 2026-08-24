@@ -20,7 +20,10 @@
 #include <windows.h>
 #include <thread>
 
-#include "./AI/AiTypes.h"
+#include <fstream>
+#include <random>
+
+#include "./AI/Kinematic.h"
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
@@ -169,18 +172,66 @@ extern "C"
 
 	void SecondThread()
 	{
+		//std::ofstream logFile("data.csv");
+
+		int characterId = 1, targetId = 2;
+		float characterPos[3];
+		float targetPos[3];
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);
+		
+		/*logFile << "character, target, steer.vel\n";
+		logFile << "{" << characterPos[0] << "," << characterPos[1] << "}, {"
+			<< targetPos[0] << "," << targetPos[1] << "}, {"
+			<< 0 << "," << 0 << "}\n";		*/
+
+		Static character;
+		character.position = VECTOR2(characterPos[0], characterPos[1]);
+		character.orientation = 0;
+
+		Static target;
+		target.position = VECTOR2(targetPos[0], targetPos[1]);
+		target.orientation = 0;
+		float maxSpeed = 2;
+		KinematicSeek seekBehavior(character, target, maxSpeed);	
+
+		DWORD dt = 100; // delta time in (ms)
+
+		float lb = -0.1f, ub = 0.1f;
+		std::random_device rd;
+		std::mt19937 gen(rd());
+		std::uniform_real_distribution<float> dist(lb, ub); // random generator between lb, ub
+
 		while (true)
 		{
-			/* >>>>>>>>>> ADD YOUR CODE HERE <<<<<<<<<< */
-			float position[3] = { 0, 0, 0 };
+			/* >>>>>>>>>> ADD YOUR CODE HERE <<<<<<<<<< */					
 
-			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, 1, position);
-			position[0] += 0.1f; // add to x
-			position[1] += 0.2f;
-			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, 1, position);
+			KinematicSteerOut2D steer = seekBehavior.GetSteering();
 
-			Sleep(100); // 300 ms period time to get, check and change position of objects
+			Static tmpChar = seekBehavior.getCharacter();
+			Static tmpTar = seekBehavior.getTarget();
+			/*logFile << "{" << tmpChar.position.x << "," << tmpChar.position.y << "}, {"
+				<< tmpTar.position.x << "," << tmpTar.position.y << "}, {"
+				<< steer.velocity.x << "," << steer.velocity.y << "}\n";*/
+
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
+			characterPos[0] += steer.velocity.x * dt / 1000.;
+			characterPos[1] += steer.velocity.y * dt / 1000.;						
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, characterId, characterPos);
+
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);						
+			// change target randomly
+			targetPos[0] += dist(gen);
+			targetPos[1] += dist(gen);
+			target.position.x = targetPos[0];
+			target.position.y = targetPos[1];
+			target.orientation = 0.;
+			seekBehavior.setTarget(target);
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, targetId, targetPos);
+
+			Sleep(dt); // 300 ms period time to get, check and change position of objects
 		}
+		//logFile.close();
 	}
 
 #pragma endregion

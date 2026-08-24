@@ -147,6 +147,16 @@ struct VECTOR2
 		y = 0.0f;
 	}
 
+	/**
+	 * @brief Normalizes the vector so that it will be of unit length
+	 */
+	void Normalize()
+	{
+		float norm = sqrtf(x * x + y * y);
+		x /= norm;
+		y /= norm;
+	}
+
 	VECTOR2& operator += (const VECTOR2&);
 	VECTOR2& operator -= (const VECTOR2&);
 	VECTOR2& operator *= (float);

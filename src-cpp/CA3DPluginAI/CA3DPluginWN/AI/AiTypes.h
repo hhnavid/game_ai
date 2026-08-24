@@ -1,4 +1,3 @@
-#pragma once
 #include "../CA3D_math/Types.h"
 
 /*
@@ -9,6 +8,19 @@ struct Static
 {
 	VECTOR2 position; // 2D vector
 	float orientation; // the direction in which a character is facing (rad)
+
+	Static()
+	{
+		position.x = 0;
+		position.y = 0;
+		orientation = 0;
+	}
+
+	Static(VECTOR2 position_, float orientation_)
+	{
+		position = position_;
+		orientation = orientation_;
+	}
 };
 
 /* 
@@ -30,50 +42,5 @@ struct SteeringOutput3D
 	float angularAcc;
 };
 
-// 2D kinematic of a character
-struct Kinematic2D
-{
-	VECTOR2 position;  // 2D position
-	float orientation; // orienation angle (rad)
-	VECTOR2 velocity;  // linear velocity
-	float rotation;	   /* angular velocity (rad/sec): represents how fast the
-						  character's orientation is changing */
 
-	void update(SteeringOutput2D steering, float time)
-	{page 47...
-		// Update the position and orientation
-		position += velocity * time +
-				0.5 * steering.linearAcc * time;
-		orientation += rotation * time +
-				0.5 * steering.angularAcc * time * time;
-				
-		// and the velocity and rotation
-		velocity += steering.linearAcc * time;
-		orientation += steering.angularAcc * time;
-	}
-};
 
-// 3D kinematic of a character
-struct Kinematic3D
-{
-	VECTOR3 position;  // 3D position
-	float orientation; // orienation angle (rad)
-	VECTOR3 velocity;  // linear velocity
-	float rotation;	   /* angular velocity (rad/sec): represents how fast the
-						  character's orientation is changing */
-};
-
-/**
- * @brief computes the orientation vector for a given orientation angle
- * 	      assuming a right-handed coordinate system
- * 
- * @param angle (rad) the input angle
- * @return VECTOR2 the vector corresponding to the given angle
- */
-VECTOR2 OrientationAngle2Vector(float angle)
-{
-	VECTOR2 orientVec;
-	orientVec.x = sin(angle);
-	orientVec.y = cos(angle);
-	return orientVec;
-}
