@@ -59,7 +59,7 @@ class KinematicBehavior
 {
 public:
 	KinematicBehavior(Static character_, Static target_, float maxSpeed_);
-	virtual KinematicSteerOut2D GetSteering() = 0;
+	virtual KinematicSteerOut2D GetSteering() = 0;	
 protected:
 	float maxSpeed;
 	Static character; // Pose of the character
@@ -80,3 +80,5 @@ public:
 	inline void setCharacter(Static character_) { character = character_; }
 	inline Static getCharacter() { return character; }
 };
+
+float getNewOrientation(const float &currOrientation, const VECTOR2 &velocity);

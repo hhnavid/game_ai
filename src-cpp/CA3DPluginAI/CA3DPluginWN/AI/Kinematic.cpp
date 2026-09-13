@@ -25,11 +25,26 @@ KinematicSteerOut2D KinematicSeek::GetSteering()
 	steering.velocity *= maxSpeed;
 		
 	// Face in the direction we want to move
-	/*character.orientation =
-		getNewOrientation(character.orientation,
-			steering.velocity)		*/
-
+	character.orientation = getNewOrientation(character.orientation,
+										      steering.velocity);
 	// Output the steering	
 	steering.rotation = 0;
 	return steering;
+}
+
+// page 49
+float getNewOrientation(const float &currOrientation, const VECTOR2 &velocity)
+{
+	// Make sure we have a velocity	
+	if (velocity.Norm() > 0)
+	{
+		// Calculate orientation using an arc tangent of
+		// the velocity components.
+		return atan2(velocity.y, velocity.x);
+	}
+	else
+	{
+		// Otherwise use the current orientation
+		return currOrientation;
+	}
 }

@@ -172,35 +172,32 @@ extern "C"
 
 	void SecondThread()
 	{
-		//std::ofstream logFile("data.csv");
+		std::ofstream logFile("data.csv");
 
-		int characterId = 1, targetId = 2;
-		float characterPos[3];
-		float targetPos[3];
+		int characterId = 2;
+		float characterPos[3];		
 		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
-		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);
-		
-		/*logFile << "character, target, steer.vel\n";
-		logFile << "{" << characterPos[0] << "," << characterPos[1] << "}, {"
-			<< targetPos[0] << "," << targetPos[1] << "}, {"
-			<< 0 << "," << 0 << "}\n";		*/
-
+		float z0 = characterPos[2];
 		Static character;
 		character.position = VECTOR2(characterPos[0], characterPos[1]);
 		character.orientation = 0;
-
+		
+		int targetId = 3;
+		float targetPos[3];		
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);
 		Static target;
 		target.position = VECTOR2(targetPos[0], targetPos[1]);
 		target.orientation = 0;
-		float maxSpeed = 2;
+		
+		logFile << "character, target, steer.vel\n";
+		logFile << "{" << characterPos[0] << "," << characterPos[1] << "}, {"
+			<< targetPos[0] << "," << targetPos[1] << "}, {"
+			<< 0 << "," << 0 << "}\n";			
+		
+		float maxSpeed = 1;
 		KinematicSeek seekBehavior(character, target, maxSpeed);	
 
-		DWORD dt = 100; // delta time in (ms)
-
-		float lb = -0.1f, ub = 0.1f;
-		std::random_device rd;
-		std::mt19937 gen(rd());
-		std::uniform_real_distribution<float> dist(lb, ub); // random generator between lb, ub
+		DWORD dt = 20; // delta time in (ms)				
 
 		while (true)
 		{
@@ -210,28 +207,28 @@ extern "C"
 
 			Static tmpChar = seekBehavior.getCharacter();
 			Static tmpTar = seekBehavior.getTarget();
-			/*logFile << "{" << tmpChar.position.x << "," << tmpChar.position.y << "}, {"
+			logFile << "{" << tmpChar.position.x << "," << tmpChar.position.y << "}, {"
 				<< tmpTar.position.x << "," << tmpTar.position.y << "}, {"
-				<< steer.velocity.x << "," << steer.velocity.y << "}\n";*/
+				<< steer.velocity.x << "," << steer.velocity.y << "}\n";
+			
+			float dtSec = dt / 1000.;
+			characterPos[0] += steer.velocity.x * dtSec;
+			characterPos[1] += steer.velocity.y * dtSec;
+			//characterPos[2] = z0;
+			tmpChar.position.x = characterPos[0];
+			tmpChar.position.y = characterPos[1];			
+			seekBehavior.setCharacter(tmpChar);
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, characterId, characterPos);			
 
-			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
-			characterPos[0] += steer.velocity.x * dt / 1000.;
-			characterPos[1] += steer.velocity.y * dt / 1000.;						
-			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, characterId, characterPos);
-
-			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);						
-			// change target randomly
-			targetPos[0] += dist(gen);
-			targetPos[1] += dist(gen);
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);												
 			target.position.x = targetPos[0];
 			target.position.y = targetPos[1];
 			target.orientation = 0.;
-			seekBehavior.setTarget(target);
-			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, targetId, targetPos);
+			seekBehavior.setTarget(target);			
 
 			Sleep(dt); // 300 ms period time to get, check and change position of objects
 		}
-		//logFile.close();
+		logFile.close();
 	}
 
 #pragma endregion
