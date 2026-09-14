@@ -150,15 +150,14 @@ struct VECTOR2
 	/**
 	 * @brief Normalizes the vector so that it will be of unit length
 	 */
-	float Normalize()
+	void Normalize()
 	{
 		float len = sqrtf(x * x + y * y);
 		if (len)
 		{
 			x /= len;
 			y /= len;
-		}
-		return len;
+		}		
 	}
 
 	float Norm() const

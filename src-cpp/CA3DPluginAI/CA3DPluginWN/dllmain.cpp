@@ -152,7 +152,9 @@ extern "C"
 #pragma endregion
 
 #pragma region Init
-	void SecondThread();
+	void SeekThread();
+	void FleeThread();
+	void ArriveThread();
 
 	EXP void Init()
 	{
@@ -161,7 +163,7 @@ extern "C"
 		if (!init)
 		{
 			init = true;
-			std::thread StreamThread(SecondThread);
+			std::thread StreamThread(ArriveThread);
 			StreamThread.detach();
 		}
 	}
@@ -170,9 +172,9 @@ extern "C"
 
 #pragma region Development
 
-	void SecondThread()
+	void SeekThread()
 	{
-		std::ofstream logFile("data.csv");
+		//std::ofstream logFile("data.csv");
 
 		int characterId = 2;
 		float characterPos[3];		
@@ -189,13 +191,13 @@ extern "C"
 		target.position = VECTOR2(targetPos[0], targetPos[1]);
 		target.orientation = 0;
 		
-		logFile << "character, target, steer.vel\n";
+		/*logFile << "character, target, steer.vel\n";
 		logFile << "{" << characterPos[0] << "," << characterPos[1] << "}, {"
 			<< targetPos[0] << "," << targetPos[1] << "}, {"
-			<< 0 << "," << 0 << "}\n";			
+			<< 0 << "," << 0 << "}\n";			*/
 		
-		float maxSpeed = 1;
-		KinematicSeek seekBehavior(character, target, maxSpeed);	
+		float maxSpeed = 2;
+		SeekBehavior seekBehavior(character, target, maxSpeed);	
 
 		DWORD dt = 20; // delta time in (ms)				
 
@@ -207,9 +209,9 @@ extern "C"
 
 			Static tmpChar = seekBehavior.getCharacter();
 			Static tmpTar = seekBehavior.getTarget();
-			logFile << "{" << tmpChar.position.x << "," << tmpChar.position.y << "}, {"
+			/*logFile << "{" << tmpChar.position.x << "," << tmpChar.position.y << "}, {"
 				<< tmpTar.position.x << "," << tmpTar.position.y << "}, {"
-				<< steer.velocity.x << "," << steer.velocity.y << "}\n";
+				<< steer.velocity.x << "," << steer.velocity.y << "}\n";*/
 			
 			float dtSec = dt / 1000.;
 			characterPos[0] += steer.velocity.x * dtSec;
@@ -228,7 +230,101 @@ extern "C"
 
 			Sleep(dt); // 300 ms period time to get, check and change position of objects
 		}
-		logFile.close();
+		//logFile.close();
+	}
+
+	void FleeThread()
+	{
+		int characterId = 2;
+		float characterPos[3];		
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
+		float z0 = characterPos[2];
+		Static character;
+		character.position = VECTOR2(characterPos[0], characterPos[1]);
+		character.orientation = 0;
+		
+		int targetId = 3;
+		float targetPos[3];		
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);
+		Static target;
+		target.position = VECTOR2(targetPos[0], targetPos[1]);
+		target.orientation = 0;				
+		
+		float maxSpeed = 2;
+		FleeBehavior fleeBehavior(character, target, maxSpeed);	
+
+		DWORD dt = 20; // delta time in (ms)				
+
+		while (true)
+		{			
+			KinematicSteerOut2D steer = fleeBehavior.GetSteering();
+
+			Static tmpChar = fleeBehavior.getCharacter();
+			Static tmpTar = fleeBehavior.getTarget();			
+			
+			float dtSec = dt / 1000.;
+			characterPos[0] += steer.velocity.x * dtSec;
+			characterPos[1] += steer.velocity.y * dtSec;			
+			tmpChar.position.x = characterPos[0];
+			tmpChar.position.y = characterPos[1];			
+			fleeBehavior.setCharacter(tmpChar);
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, characterId, characterPos);			
+
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);												
+			target.position.x = targetPos[0];
+			target.position.y = targetPos[1];
+			target.orientation = 0.;
+			fleeBehavior.setTarget(target);			
+
+			Sleep(dt); // 300 ms period time to get, check and change position of objects
+		}		
+	}
+
+	void ArriveThread()
+	{
+		int characterId = 2;
+		float characterPos[3];		
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
+		float z0 = characterPos[2];
+		Static character;
+		character.position = VECTOR2(characterPos[0], characterPos[1]);
+		character.orientation = 0;
+		
+		int targetId = 3;
+		float targetPos[3];		
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);
+		Static target;
+		target.position = VECTOR2(targetPos[0], targetPos[1]);
+		target.orientation = 0;				
+		
+		float maxSpeed = 2;
+		ArriveBehavior arriveBehavior(character, target, maxSpeed, 0.1, 0.25);	
+
+		DWORD dt = 20; // delta time in (ms)				
+
+		while (true)
+		{			
+			KinematicSteerOut2D steer = arriveBehavior.GetSteering();
+
+			Static tmpChar = arriveBehavior.getCharacter();
+			Static tmpTar = arriveBehavior.getTarget();			
+			
+			float dtSec = dt / 1000.;
+			characterPos[0] += steer.velocity.x * dtSec;
+			characterPos[1] += steer.velocity.y * dtSec;			
+			tmpChar.position.x = characterPos[0];
+			tmpChar.position.y = characterPos[1];			
+			arriveBehavior.setCharacter(tmpChar);
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, characterId, characterPos);			
+
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, targetId, targetPos);												
+			target.position.x = targetPos[0];
+			target.position.y = targetPos[1];
+			target.orientation = 0.;
+			arriveBehavior.setTarget(target);			
+
+			Sleep(dt); // 300 ms period time to get, check and change position of objects
+		}		
 	}
 
 #pragma endregion
