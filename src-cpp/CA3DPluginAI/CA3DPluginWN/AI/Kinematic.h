@@ -1,4 +1,4 @@
-#include "AiTypes.h"
+#include "utils.h"
 
 /*
 Updating a character's position and orientation is usually done
@@ -58,48 +58,63 @@ struct KinematicSteerOut2D
 class KinematicBehavior
 {
 public:
-	KinematicBehavior(Static character_, Static target_, float maxSpeed_);
-	virtual KinematicSteerOut2D GetSteering() = 0;
-	inline void setTarget(Static target_) { target = target_; }
-	inline Static getTarget() { return target; }
+	KinematicBehavior(Static character_, float maxSpeed_);
+	~KinematicBehavior();
+	virtual KinematicSteerOut2D GetSteering() = 0;	
 	inline void setCharacter(Static character_) { character = character_; }
 	inline Static getCharacter() { return character; }
-
+	// TODO: add set/get methods for all of the class attributes
 protected:
 	float maxSpeed;
-	Static character; // Pose of the character
-	/* Pose of the target. Depending on the child class implementation,
-	   the character may for example seek the target or run from it.
-	*/
-	Static target;
+	Static character; // Pose of the character	
 };
 
 /*page 50*/
-class SeekBehavior : public KinematicBehavior
+class KinematicSeek : public KinematicBehavior
 {
 public:
-	SeekBehavior(Static character_, Static target_, float maxSpeed_);
+	KinematicSeek(Static character_, Static target_, float maxSpeed_);
+	~KinematicSeek();
 	virtual KinematicSteerOut2D GetSteering();
+	inline void setTarget(Static target_) { target = target_; }
+	inline Static getTarget() { return target; }
+
+private:
+	// Pose of the target sought by the character.	
+	Static target;
 };
 
 /* page 51 */
-class FleeBehavior : public KinematicBehavior
+class KinematicFlee : public KinematicBehavior
 {
 public:
-	FleeBehavior(Static character_, Static target_, float maxSpeed_);
+	KinematicFlee(Static character_, Static target_, float maxSpeed_);
+	~KinematicFlee();
 	virtual KinematicSteerOut2D GetSteering();
+	inline void setTarget(Static target_) { target = target_; }
+	inline Static getTarget() { return target; }
+private:
+	// Pose of the target from which the character tries to flee.
+	Static target;
 };
 
 /**
  * page52: Arrive behavior is similar to the Seek behavior except that it uses timeToTarget
  * & radius attributes to avoid wiggling motion when the character gets too close to the target.
  */
-class ArriveBehavior : public KinematicBehavior
+class KinematicArrive : public KinematicBehavior
 {
 public:
-	ArriveBehavior(Static character_, Static target_, float maxSpeed_, float radius_, float timeToTarget_);
+	KinematicArrive(Static character_, Static target_, float maxSpeed_, float radius_, float timeToTarget_);
+	~KinematicArrive();
 	virtual KinematicSteerOut2D GetSteering();
+	inline void setTarget(Static target_) { target = target_; }
+	inline Static getTarget() { return target; }
+	// TODO: add set/get methods for all of the class attributes
 private:
+	// Pose of the target sought by the character.	
+	Static target;
+
 	/* when the character distance to the target < radius,
 	 the target is reached & seeking is over.*/
 	float radius;
@@ -109,4 +124,21 @@ private:
 	float timeToTarget = 0.25;
 };
 
-float GetNewOrientation(const float &currOrientation, const VECTOR2 &velocity);
+/**
+ * page 53: Wandering behavior in which the character always move in the direction it's facing.
+ * The direction of the character is changed randomly to create a wandering effect. 
+ */
+class KinematicWander : public KinematicBehavior
+{
+public:
+	KinematicWander(Static character_, float maxSpeed_, float maxRotation_);
+	~KinematicWander();
+	virtual KinematicSteerOut2D GetSteering();
+
+private:
+	/* The max rotation speed which should be
+	set smaller than the maximum possible value so 
+	that a liesurely change in the direction will be possible*/
+	float maxRotation;
+};
+

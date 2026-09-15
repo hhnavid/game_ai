@@ -21,6 +21,16 @@ struct Static
 		position = position_;
 		orientation = orientation_;
 	}
+
+	// page 44: conversion of orientation angle to vector
+	VECTOR2 OrientationAsVector()
+	{
+		// a right-handed coordinate system is assumed
+		VECTOR2 orientVec;
+		orientVec.x = sin(orientation);
+		orientVec.y = cos(orientation);
+		return orientVec;
+	}	
 };
 
 /* 

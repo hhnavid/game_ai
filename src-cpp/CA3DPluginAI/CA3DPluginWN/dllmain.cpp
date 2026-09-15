@@ -155,6 +155,7 @@ extern "C"
 	void SeekThread();
 	void FleeThread();
 	void ArriveThread();
+	void WanderThread();
 
 	EXP void Init()
 	{
@@ -163,7 +164,7 @@ extern "C"
 		if (!init)
 		{
 			init = true;
-			std::thread StreamThread(ArriveThread);
+			std::thread StreamThread(WanderThread);
 			StreamThread.detach();
 		}
 	}
@@ -197,7 +198,7 @@ extern "C"
 			<< 0 << "," << 0 << "}\n";			*/
 		
 		float maxSpeed = 2;
-		SeekBehavior seekBehavior(character, target, maxSpeed);	
+		KinematicSeek seekBehavior(character, target, maxSpeed);	
 
 		DWORD dt = 20; // delta time in (ms)				
 
@@ -251,7 +252,7 @@ extern "C"
 		target.orientation = 0;				
 		
 		float maxSpeed = 2;
-		FleeBehavior fleeBehavior(character, target, maxSpeed);	
+		KinematicFlee fleeBehavior(character, target, maxSpeed);	
 
 		DWORD dt = 20; // delta time in (ms)				
 
@@ -298,7 +299,7 @@ extern "C"
 		target.orientation = 0;				
 		
 		float maxSpeed = 2;
-		ArriveBehavior arriveBehavior(character, target, maxSpeed, 0.1, 0.25);	
+		KinematicArrive arriveBehavior(character, target, maxSpeed, 0.1, 0.25);	
 
 		DWORD dt = 20; // delta time in (ms)				
 
@@ -325,6 +326,41 @@ extern "C"
 
 			Sleep(dt); // 300 ms period time to get, check and change position of objects
 		}		
+	}
+
+	void WanderThread()
+	{
+		int characterId = 2;
+		float characterPos[3];
+		((CallbackFunctionIntIntFloatCaller)StaticMesh_GetPosition)(0, characterId, characterPos);
+		float z0 = characterPos[2];
+		Static character;
+		character.position = VECTOR2(characterPos[0], characterPos[1]);
+		character.orientation = 0;		
+
+		float maxSpeed = 2;
+		float maxRotation = M_PI / 8;
+		KinematicWander wanderBehavior(character, maxSpeed, maxRotation);		
+
+		DWORD dt = 20; // delta time in (ms)				
+
+		while (true)
+		{
+			KinematicSteerOut2D steer = wanderBehavior.GetSteering();
+
+			Static tmpChar = wanderBehavior.getCharacter();			
+
+			float dtSec = dt / 1000.;			
+			characterPos[0] += steer.velocity.x * dtSec;
+			characterPos[1] += steer.velocity.y * dtSec;
+			tmpChar.position.x = characterPos[0];
+			tmpChar.position.y = characterPos[1];
+			tmpChar.orientation += steer.rotation;
+			wanderBehavior.setCharacter(tmpChar);
+			((CallbackFunctionIntIntFloatCaller)StaticMesh_SetPosition)(0, characterId, characterPos);						
+
+			Sleep(dt); // 300 ms period time to get, check and change position of objects
+		}
 	}
 
 #pragma endregion

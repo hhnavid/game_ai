@@ -1,18 +1,24 @@
 #include "stdafx.h"
 #include "Kinematic.h"
 
-KinematicBehavior::KinematicBehavior(Static character_, Static target_, float maxSpeed_)
+KinematicBehavior::KinematicBehavior(Static character_, float maxSpeed_)
 {
-	character = character_;
-	target = target_;
+	character = character_;	
 	maxSpeed = maxSpeed_;
 }
 
-SeekBehavior::SeekBehavior(Static character_, Static target_, float maxSpeed_) : KinematicBehavior(character_, target_, maxSpeed_)
+KinematicBehavior::~KinematicBehavior()
+{}
+
+KinematicSeek::KinematicSeek(Static character_, Static target_, float maxSpeed_) : KinematicBehavior(character_, maxSpeed_)
 {
+	target = target_;
 }
 
-KinematicSteerOut2D SeekBehavior::GetSteering()
+KinematicSeek::~KinematicSeek()
+{}
+
+KinematicSteerOut2D KinematicSeek::GetSteering()
 {
 	// Create the structure for output
 	KinematicSteerOut2D steering;
@@ -32,11 +38,15 @@ KinematicSteerOut2D SeekBehavior::GetSteering()
 	return steering;
 }
 
-FleeBehavior::FleeBehavior(Static character_, Static target_, float maxSpeed_) : KinematicBehavior(character_, target_, maxSpeed_)
+KinematicFlee::KinematicFlee(Static character_, Static target_, float maxSpeed_) : KinematicBehavior(character_, maxSpeed_)
 {
+	target = target_;
 }
 
-KinematicSteerOut2D FleeBehavior::GetSteering()
+KinematicFlee::~KinematicFlee()
+{}
+
+KinematicSteerOut2D KinematicFlee::GetSteering()
 {
 	// Create the structure for output
 	KinematicSteerOut2D steering;
@@ -56,13 +66,18 @@ KinematicSteerOut2D FleeBehavior::GetSteering()
 	return steering;
 }
 
-ArriveBehavior::ArriveBehavior(Static character_, Static target_, float maxSpeed_, float radius_, float timeToTarget_) : KinematicBehavior(character_, target_, maxSpeed_)
+KinematicArrive::KinematicArrive(Static character_, Static target_, float maxSpeed_, float radius_, float timeToTarget_) :
+	KinematicBehavior(character_, maxSpeed_)
 {
+	target = target_;
 	radius = radius_;
 	timeToTarget = timeToTarget_;
 }
 
-KinematicSteerOut2D ArriveBehavior::GetSteering()
+KinematicArrive::~KinematicArrive()
+{}
+
+KinematicSteerOut2D KinematicArrive::GetSteering()
 {
 	// Create the structure for output
 	KinematicSteerOut2D steering;
@@ -97,19 +112,26 @@ KinematicSteerOut2D ArriveBehavior::GetSteering()
 	return steering;
 }
 
-// page 49
-float GetNewOrientation(const float &currOrientation, const VECTOR2 &velocity)
+KinematicWander::KinematicWander(Static character_, float maxSpeed_, float maxRotation_) :
+	KinematicBehavior(character_, maxSpeed_)
 {
-	// Make sure we have a velocity
-	if (velocity.Norm() > 0)
-	{
-		// Calculate orientation using an arc tangent of
-		// the velocity components.
-		return atan2(velocity.y, velocity.x);
-	}
-	else
-	{
-		// Otherwise use the current orientation
-		return currOrientation;
-	}
+	maxRotation = maxRotation_;
+}
+
+KinematicWander::~KinematicWander()
+{}
+
+KinematicSteerOut2D KinematicWander::GetSteering()
+{
+	// Create the structure for output
+	KinematicSteerOut2D steering;
+
+	// Get velocity from the vector form of the orientation
+	steering.velocity = maxSpeed * character.OrientationAsVector();
+
+	// Change the steering orientation randomly to create a wandering motion
+	steering.rotation = RandomBinomial() * maxRotation;
+
+	// Output the steering
+	return steering;
 }
